@@ -60,13 +60,24 @@ class ResumeData:
 
 
 @dataclass
-class FieldLocator:
+class FieldLocatorConfig:
     field_name: str
     label_texts: List[str]
     selectors: List[str]
     input_type: str = "text"
     required: bool = False
     platform_specific: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class LocatedField:
+    field_name: str
+    selector: str
+    label_text: Optional[str] = None
+    input_type: str = "text"
+    element_handle: Any = None
+    is_required: bool = False
+    frame_context: Any = None
 
 
 @dataclass

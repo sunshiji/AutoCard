@@ -2,23 +2,11 @@ import os
 import sys
 import re
 from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
-from models import FieldLocator
-
-
-@dataclass
-class LocatedField:
-    field_name: str
-    selector: str
-    label_text: Optional[str] = None
-    input_type: str = "text"
-    element_handle: Any = None
-    is_required: bool = False
-    frame_context: Any = None
+from models import LocatedField
 
 
 class FieldLocator:
