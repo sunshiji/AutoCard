@@ -178,6 +178,9 @@ class BaseParser(ABC):
             r'■([\u4e00-\u9fa5]{2,8})',
             r'◆([\u4e00-\u9fa5]{2,8})',
             r'●([\u4e00-\u9fa5]{2,8})',
+            r'★([\u4e00-\u9fa5]{2,8})',
+            r'▶([\u4e00-\u9fa5]{2,8})',
+            r'►([\u4e00-\u9fa5]{2,8})',
         ]
         
         sections = {}
@@ -198,12 +201,59 @@ class BaseParser(ABC):
             if not is_section_header:
                 sections[current_section] += line + '\n'
         
+        if len(sections) <= 1:
+            sections = self._split_by_sections_fuzzy(text)
+        
+        return sections
+    
+    def _split_by_sections_fuzzy(self, text: str) -> Dict[str, str]:
+        sections = {}
+        current_section = 'basic_info'
+        sections[current_section] = ''
+        
+        section_keywords = {
+            '教育': '教育经历',
+            '工作': '工作经历',
+            '项目': '项目经历',
+            '技能': '技能',
+            '自我介绍': '自我介绍',
+            '个人简介': '自我介绍',
+            '自我评价': '自我介绍',
+            '基本信息': '基本信息',
+            '个人信息': '个人信息',
+            '求职意向': '求职意向',
+        }
+        
+        lines = text.split('\n')
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            if not line_stripped:
+                sections[current_section] += line + '\n'
+                continue
+            
+            matched = False
+            for keyword, section_name in section_keywords.items():
+                if keyword in line_stripped and len(line_stripped) < 15:
+                    if re.search(rf'^[■◆●★▶►\s]*{keyword}', line_stripped):
+                        current_section = section_name
+                        sections[current_section] = ''
+                        matched = True
+                        break
+            
+            if not matched:
+                sections[current_section] += line + '\n'
+        
         return sections
     
     def _parse_education_section(self, section_text: str) -> List[EducationExperience]:
         experiences = []
         
         edu_blocks = self._split_experience_blocks(section_text)
+        
+        if not edu_blocks or len(edu_blocks) == 0:
+            edu_blocks = self._split_education_fuzzy(section_text)
         
         for block in edu_blocks:
             exp = EducationExperience()
@@ -216,39 +266,105 @@ class BaseParser(ABC):
                 exp.end_date = date_range[1]
             
             school_patterns = [
-                r'([\u4e00-\u9fa5]{2,}(大学|学院|学校|研究院|研究所))',
+                r'([\u4e00-\u9fa5]{2,}(大学|学院|学校|研究院|研究所|警校|军校))',
                 r'University\s+of\s+[\w]+',
                 r'[\w]+\s+University',
+                r'[\w]+\s+College',
+                r'学校[：:]\s*([^\n\r，。；;\s]+)',
+                r'毕业院校[：:]\s*([^\n\r，。；;\s]+)',
+                r'院校[：:]\s*([^\n\r，。；;\s]+)',
             ]
             
             for pattern in school_patterns:
                 match = re.search(pattern, block)
                 if match:
-                    exp.school = match.group().strip()
+                    if match.lastindex:
+                        exp.school = match.group(1).strip()
+                    else:
+                        exp.school = match.group().strip()
                     break
             
             major_patterns = [
-                r'专业[：:]\s*([^\n\r，。；;]+)',
-                r'主修[：:]\s*([^\n\r，。；;]+)',
+                r'专业[：:]\s*([^\n\r，。；;\n]+)',
+                r'主修[：:]\s*([^\n\r，。；;\n]+)',
+                r'所学专业[：:]\s*([^\n\r，。；;\n]+)',
+                r'专业方向[：:]\s*([^\n\r，。；;\n]+)',
+                r'([\u4e00-\u9fa5]{2,10}专业)',
             ]
             
             for pattern in major_patterns:
                 match = re.search(pattern, block)
                 if match:
-                    exp.major = match.group(1).strip()
+                    if match.lastindex:
+                        exp.major = match.group(1).strip()
+                    else:
+                        exp.major = match.group().strip()
                     break
             
             exp.education = self._extract_education(block)
             
-            if exp.school or exp.major or exp.education:
+            if not exp.education:
+                edu_indicators = [
+                    ('博士研究生', '博士'),
+                    ('硕士研究生', '硕士'),
+                    ('研究生', '硕士'),
+                    ('本科', '本科'),
+                    ('学士', '本科'),
+                    ('大专', '大专'),
+                    ('专科', '大专'),
+                    ('高中', '高中'),
+                ]
+                
+                for indicator, edu in edu_indicators:
+                    if indicator in block:
+                        exp.education = edu
+                        break
+            
+            if exp.school or exp.major or exp.education or exp.start_date:
                 experiences.append(exp)
         
         return experiences
+    
+    def _split_education_fuzzy(self, text: str) -> List[str]:
+        blocks = []
+        
+        school_keywords = [
+            '大学', '学院', '学校', '研究院', '研究所',
+            'University', 'College', 'university', 'college'
+        ]
+        
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        
+        current_block = ''
+        in_education = False
+        
+        for line in lines:
+            has_school = any(kw in line for kw in school_keywords)
+            has_date = re.search(r'\d{4}[\s年./-]*\d{0,2}', line)
+            
+            if has_school or has_date:
+                if current_block:
+                    blocks.append(current_block.strip())
+                current_block = line + '\n'
+                in_education = True
+            elif in_education:
+                current_block += line + '\n'
+        
+        if current_block:
+            blocks.append(current_block.strip())
+        
+        if not blocks:
+            blocks = [text.strip()]
+        
+        return blocks
     
     def _parse_work_section(self, section_text: str) -> List[WorkExperience]:
         experiences = []
         
         work_blocks = self._split_experience_blocks(section_text)
+        
+        if not work_blocks or len(work_blocks) == 0:
+            work_blocks = self._split_work_fuzzy(section_text)
         
         for block in work_blocks:
             exp = WorkExperience()
@@ -259,34 +375,45 @@ class BaseParser(ABC):
                 exp.end_date = date_range[1]
             
             company_patterns = [
-                r'公司[：:]\s*([^\n\r，。；;]+)',
-                r'企业[：:]\s*([^\n\r，。；;]+)',
-                r'任职于[：:]\s*([^\n\r，。；;]+)',
-                r'([\u4e00-\u9fa5]{2,}(公司|集团|企业|有限公司|科技))',
+                r'公司[：:]\s*([^\n\r，。；;\s]+)',
+                r'企业[：:]\s*([^\n\r，。；;\s]+)',
+                r'任职于[：:]\s*([^\n\r，。；;\s]+)',
+                r'工作单位[：:]\s*([^\n\r，。；;\s]+)',
+                r'([\u4e00-\u9fa5]{2,}(公司|集团|企业|有限公司|科技|信息|软件|数据|互联网|网络|电子|通信))',
             ]
             
             for pattern in company_patterns:
                 match = re.search(pattern, block)
                 if match:
-                    exp.company = match.group(1).strip() if '：' in pattern or ':' in pattern else match.group().strip()
+                    if match.lastindex:
+                        exp.company = match.group(1).strip()
+                    else:
+                        exp.company = match.group().strip()
                     break
             
             position_patterns = [
-                r'职位[：:]\s*([^\n\r，。；;]+)',
-                r'岗位[：:]\s*([^\n\r，。；;]+)',
-                r'担任[：:]\s*([^\n\r，。；;]+)',
+                r'职位[：:]\s*([^\n\r，。；;\n]+)',
+                r'岗位[：:]\s*([^\n\r，。；;\n]+)',
+                r'担任[：:]\s*([^\n\r，。；;\n]+)',
+                r'职务[：:]\s*([^\n\r，。；;\n]+)',
+                r'([\u4e00-\u9fa5]{2,6}(工程师|设计师|经理|主管|总监|专员|顾问|分析师|开发|测试|产品))',
             ]
             
             for pattern in position_patterns:
                 match = re.search(pattern, block)
                 if match:
-                    exp.position = match.group(1).strip()
+                    if match.lastindex:
+                        exp.position = match.group(1).strip()
+                    else:
+                        exp.position = match.group().strip()
                     break
             
             desc_patterns = [
                 r'工作内容[：:]\s*([\s\S]+?)(?=\n\s*\n|$)',
                 r'工作职责[：:]\s*([\s\S]+?)(?=\n\s*\n|$)',
                 r'工作描述[：:]\s*([\s\S]+?)(?=\n\s*\n|$)',
+                r'职责描述[：:]\s*([\s\S]+?)(?=\n\s*\n|$)',
+                r'主要职责[：:]\s*([\s\S]+?)(?=\n\s*\n|$)',
             ]
             
             for pattern in desc_patterns:
@@ -295,10 +422,55 @@ class BaseParser(ABC):
                     exp.description = match.group(1).strip()
                     break
             
-            if exp.company or exp.position:
+            if not exp.description:
+                lines = [l.strip() for l in block.split('\n') if l.strip()]
+                if lines:
+                    start_idx = 0
+                    for i, line in enumerate(lines):
+                        if re.search(r'(工作内容|工作职责|工作描述|主要职责|项目)', line):
+                            start_idx = i
+                            break
+                    if start_idx < len(lines) - 1:
+                        exp.description = '\n'.join(lines[start_idx + 1:])
+            
+            if exp.company or exp.position or exp.start_date:
                 experiences.append(exp)
         
         return experiences
+    
+    def _split_work_fuzzy(self, text: str) -> List[str]:
+        blocks = []
+        
+        company_keywords = [
+            '公司', '集团', '企业', '有限公司', '科技', '信息', '软件',
+            '互联网', '网络', '电子', '通信', '数据'
+        ]
+        
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        
+        current_block = ''
+        in_work = False
+        
+        for line in lines:
+            has_company = any(kw in line for kw in company_keywords)
+            has_position = re.search(r'(工程师|设计师|经理|主管|总监|专员|顾问|分析师|开发|测试|产品)', line)
+            has_date = re.search(r'\d{4}[\s年./-]*\d{0,2}', line)
+            
+            if has_company or has_position or has_date:
+                if current_block:
+                    blocks.append(current_block.strip())
+                current_block = line + '\n'
+                in_work = True
+            elif in_work:
+                current_block += line + '\n'
+        
+        if current_block:
+            blocks.append(current_block.strip())
+        
+        if not blocks:
+            blocks = [text.strip()]
+        
+        return blocks
     
     def _parse_project_section(self, section_text: str) -> List[ProjectExperience]:
         experiences = []

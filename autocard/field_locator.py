@@ -480,7 +480,11 @@ class FieldLocator:
     def _generate_selector(self, element) -> str:
         elem_id = element.get_attribute("id")
         if elem_id and not elem_id.startswith("__"):
-            return f"#{elem_id}"
+            if self._is_valid_css_id(elem_id):
+                return f"#{elem_id}"
+            else:
+                tag_name = element.evaluate("el => el.tagName.toLowerCase()")
+                return f"{tag_name}[id='{elem_id}']"
         
         name = element.get_attribute("name")
         if name:
@@ -498,7 +502,12 @@ class FieldLocator:
                 while (el && el.nodeType === Node.ELEMENT_NODE) {
                     let selector = el.tagName.toLowerCase();
                     if (el.id) {
-                        selector += '#' + el.id;
+                        const idStr = el.id;
+                        if (/^[a-zA-Z_-][a-zA-Z0-9_-]*$/.test(idStr)) {
+                            selector += '#' + idStr;
+                        } else {
+                            selector += '[id="' + idStr + '"]';
+                        }
                         path.unshift(selector);
                         break;
                     } else {
@@ -517,6 +526,15 @@ class FieldLocator:
         """)
         
         return css_path or "input"
+    
+    def _is_valid_css_id(self, id_str: str) -> bool:
+        if not id_str:
+            return False
+        if id_str[0].isdigit():
+            return False
+        if not re.match(r'^[a-zA-Z_-][a-zA-Z0-9_-]*$', id_str):
+            return False
+        return True
     
     def clear_cache(self):
         self._cache = {}

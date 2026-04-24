@@ -312,10 +312,20 @@ class FormFiller:
                     selector_used=selector
                 )
             
+            self._wait_for_overlay(element)
+            
             element.scroll_into_view_if_needed()
             self.anti_detection.random_delay(0.1, 0.3)
             
-            element.click()
+            try:
+                element.click(timeout=5000)
+            except Exception as click_error:
+                if "intercept" in str(click_error).lower() or "pointer" in str(click_error).lower():
+                    print(f"  [提示] 点击被拦截，尝试使用JavaScript点击: {field_name}")
+                    element.evaluate("el => el.click()")
+                else:
+                    raise click_error
+            
             self.anti_detection.random_delay(0.1, 0.2)
             
             element.evaluate("el => el.value = ''")
@@ -340,6 +350,76 @@ class FormFiller:
                 error_message=str(e),
                 selector_used=located.selector
             )
+    
+    def _wait_for_overlay(self, element, timeout: int = 5000):
+        start_time = time.time()
+        overlay_selectors = [
+            ".loading",
+            ".spinner",
+            ".overlay",
+            ".modal-backdrop",
+            "[class*='loading']",
+            "[class*='spinner']",
+            "[class*='overlay']",
+            ".el-loading-mask",
+            ".ant-spin-container",
+            ".mask",
+            "#loading",
+        ]
+        
+        while time.time() - start_time < timeout / 1000:
+            try:
+                is_blocked = element.evaluate("""
+                    el => {
+                        const rect = el.getBoundingClientRect();
+                        const centerX = rect.left + rect.width / 2;
+                        const centerY = rect.top + rect.height / 2;
+                        const topElement = document.elementFromPoint(centerX, centerY);
+                        if (topElement && !el.contains(topElement) && topElement !== el) {
+                            const computedStyle = window.getComputedStyle(topElement);
+                            const pointerEvents = computedStyle.pointerEvents;
+                            const zIndex = computedStyle.zIndex;
+                            const opacity = computedStyle.opacity;
+                            const display = computedStyle.display;
+                            const visibility = computedStyle.visibility;
+                            
+                            if (pointerEvents === 'none' || opacity === '0' || 
+                                display === 'none' || visibility === 'hidden') {
+                                return false;
+                            }
+                            
+                            if (zIndex && zIndex !== 'auto') {
+                                const elZIndex = window.getComputedStyle(el).zIndex;
+                                if (parseInt(zIndex) > parseInt(elZIndex || '0')) {
+                                    return true;
+                                }
+                            }
+                            return topElement !== el;
+                        }
+                        return false;
+                    }
+                """)
+                
+                if not is_blocked:
+                    return
+                
+                time.sleep(0.1)
+                
+            except Exception:
+                time.sleep(0.1)
+        
+        for sel in overlay_selectors:
+            try:
+                overlays = self.page.query_selector_all(sel)
+                for overlay in overlays:
+                    try:
+                        if overlay.is_visible():
+                            overlay.evaluate("el => el.style.display = 'none'")
+                            print(f"  [提示] 隐藏了遮罩元素: {sel}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     
     def _fill_date_field(
         self, 
