@@ -1,4 +1,5 @@
 import os
+import platform
 from typing import Dict, List, Optional
 
 
@@ -6,6 +7,29 @@ class Config:
     BROWSER_HEADLESS = False
     BROWSER_SLOW_MO = 100
     BROWSER_VIEWPORT = {"width": 1920, "height": 1080}
+    
+    BROWSER_TYPE = "chromium"
+    BROWSER_EXECUTABLE_PATH = None
+    BROWSER_USER_DATA_DIR = None
+    
+    USE_CDP = False
+    CDP_ENDPOINT = "http://localhost:9222"
+    
+    USE_SELENIUM = False
+    SELENIUM_DRIVER_PATH = None
+    
+    MIRROR_CONFIG = {
+        "playwright": {
+            "china": {
+                "PLAYWRIGHT_DOWNLOAD_HOST": "https://npmmirror.com/mirrors/playwright",
+                "PLAYWRIGHT_DOWNLOAD_HOST_CN": "https://cdn.npmmirror.com/binaries/playwright"
+            }
+        },
+        "selenium": {
+            "chrome_driver_mirror": "https://npmmirror.com/mirrors/chromedriver",
+            "edge_driver_mirror": "https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/"
+        }
+    }
     
     INPUT_DELAY_MIN = 0.1
     INPUT_DELAY_MAX = 0.3
@@ -57,3 +81,59 @@ class Config:
 
 
 config = Config()
+
+
+def get_system_chrome_path() -> Optional[str]:
+    system = platform.system()
+    
+    if system == "Windows":
+        chrome_paths = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+        
+        for path in chrome_paths:
+            if os.path.exists(path):
+                return path
+    
+    elif system == "Darwin":
+        chrome_paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+        
+        for path in chrome_paths:
+            if os.path.exists(path):
+                return path
+    
+    elif system == "Linux":
+        chrome_paths = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+        ]
+        
+        for path in chrome_paths:
+            if os.path.exists(path):
+                return path
+    
+    return None
+
+
+def get_default_user_data_dir() -> Optional[str]:
+    system = platform.system()
+    
+    if system == "Windows":
+        return os.path.expandvars(r"%LocalAppData%\Google\Chrome\User Data")
+    elif system == "Darwin":
+        return os.path.expanduser("~/Library/Application Support/Google/Chrome")
+    elif system == "Linux":
+        return os.path.expanduser("~/.config/google-chrome")
+    
+    return None
+

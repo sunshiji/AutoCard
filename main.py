@@ -5,7 +5,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import config
+from config import config, get_default_user_data_dir
 from models import ResumeData
 from autocard.resume_parser import ResumeParser
 from autocard.browser_manager import BrowserManager, BrowserConfig
@@ -19,9 +19,31 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  python main.py --resume resume.pdf --url "https://example.com/resume/edit"
-  python main.py --resume resume.docx --headless
-  python main.py --resume resume.pdf --platform liepin
+
+  基本用法:
+    python main.py --resume resume.pdf --url "https://example.com/resume/edit"
+
+  使用系统已安装的 Chrome/Edge (推荐，无需额外下载):
+    python main.py --resume resume.pdf --url "xxx" --use-system-browser
+
+  使用用户数据目录 (保持登录状态，不用每次登录):
+    python main.py --resume resume.pdf --url "xxx" --user-data-dir
+
+  指定浏览器路径:
+    python main.py --resume resume.pdf --url "xxx" --browser-path "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+
+  通过 CDP 连接已运行的浏览器:
+    1. 先启动 Chrome: chrome.exe --remote-debugging-port=9222
+    2. 然后运行: python main.py --resume resume.pdf --url "xxx" --cdp
+
+  使用国内镜像安装 Playwright 浏览器 (如需要):
+    Windows CMD:
+      set PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+      playwright install chromium
+
+    Windows PowerShell:
+      $env:PLAYWRIGHT_DOWNLOAD_HOST='https://npmmirror.com/mirrors/playwright'
+      playwright install chromium
         """
     )
     
@@ -68,6 +90,56 @@ def parse_arguments():
         help="调试模式，遇到错误时暂停"
     )
     
+    browser_group = parser.add_argument_group("浏览器选项")
+    
+    browser_group.add_argument(
+        "--use-system-browser",
+        action="store_true",
+        default=True,
+        help="使用系统已安装的 Chrome/Edge 浏览器 (默认: True)"
+    )
+    
+    browser_group.add_argument(
+        "--no-system-browser",
+        action="store_true",
+        help="禁用系统浏览器，强制使用 Playwright 内置浏览器"
+    )
+    
+    browser_group.add_argument(
+        "--browser-path",
+        type=str,
+        help="指定浏览器可执行文件路径"
+    )
+    
+    browser_group.add_argument(
+        "--browser-type",
+        choices=["chromium", "firefox", "webkit"],
+        default="chromium",
+        help="浏览器类型 (默认: chromium)"
+    )
+    
+    browser_group.add_argument(
+        "--user-data-dir",
+        nargs="?",
+        const="default",
+        help="使用用户数据目录 (保持登录状态)。可指定路径，或使用 'default' 使用默认路径"
+    )
+    
+    cdp_group = parser.add_argument_group("CDP 连接选项")
+    
+    cdp_group.add_argument(
+        "--cdp",
+        action="store_true",
+        help="通过 CDP 协议连接已运行的浏览器"
+    )
+    
+    cdp_group.add_argument(
+        "--cdp-endpoint",
+        type=str,
+        default="http://localhost:9222",
+        help="CDP 端点地址 (默认: http://localhost:9222)"
+    )
+    
     return parser.parse_args()
 
 
@@ -83,13 +155,16 @@ def get_platform_url(platform: str) -> Optional[str]:
 def main():
     args = parse_arguments()
     
-    print("=" * 50)
+    use_system_browser = args.use_system_browser and not args.no_system_browser
+    
+    print("=" * 60)
     print("AutoCard - 自动化简历填写脚本")
-    print("=" * 50)
+    print("=" * 60)
     print(f"简历文件: {args.resume}")
     print(f"目标平台: {args.platform}")
+    print(f"浏览器模式: {'CDP 连接' if args.cdp else ('系统浏览器' if use_system_browser else 'Playwright 内置')}")
     print(f"无头模式: {args.headless}")
-    print("=" * 50)
+    print("=" * 60)
     
     if not os.path.exists(args.resume):
         print(f"错误: 简历文件不存在: {args.resume}")
@@ -134,10 +209,29 @@ def main():
         print("\n错误: 未提供目标URL，请使用 --url 参数指定")
         sys.exit(1)
     
-    print("\n[2/5] 启动浏览器...")
+    print("\n[2/5] 准备浏览器...")
+    
+    user_data_dir = None
+    if args.user_data_dir:
+        if args.user_data_dir == "default":
+            user_data_dir = get_default_user_data_dir()
+            if user_data_dir:
+                print(f"  使用默认用户数据目录: {user_data_dir}")
+            else:
+                print("  警告: 无法获取默认用户数据目录")
+        else:
+            user_data_dir = args.user_data_dir
+            print(f"  使用指定用户数据目录: {user_data_dir}")
+    
     browser_config = BrowserConfig(
         headless=args.headless,
-        slow_mo=args.slow_mo
+        slow_mo=args.slow_mo,
+        browser_type=args.browser_type,
+        executable_path=args.browser_path,
+        user_data_dir=user_data_dir,
+        use_cdp=args.cdp,
+        cdp_endpoint=args.cdp_endpoint,
+        use_system_browser=use_system_browser,
     )
     
     browser_manager = BrowserManager(browser_config=browser_config)
