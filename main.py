@@ -154,6 +154,29 @@ def get_platform_url(platform: str) -> Optional[str]:
     return None
 
 
+def detect_platform_from_url(url: str) -> Optional[str]:
+    url_lower = url.lower()
+    
+    platform_patterns = {
+        "beisen": ["zhiye.com", "beisen", "北森"],
+        "liepin": ["liepin.com", "猎聘"],
+        "boss": ["zhipin.com", "boss", "boss直聘"],
+    }
+    
+    for platform, patterns in platform_patterns.items():
+        for pattern in patterns:
+            if pattern.lower() in url_lower:
+                return platform
+    
+    return None
+
+
+def get_platform_selectors(platform: str) -> Dict[str, List[str]]:
+    if platform in config.PLATFORM_CONFIGS:
+        return config.PLATFORM_CONFIGS[platform].get("field_selectors", {})
+    return {}
+
+
 class LoginDetector:
     LOGIN_INDICATORS = [
         {"type": "text", "value": "登录", "description": "页面包含'登录'文字"},
@@ -636,7 +659,17 @@ def main():
             input()
         
         print("\n[5/5] 开始填写表单...")
-        form_filler = FormFiller(browser_manager, resume_data)
+        
+        detected_platform = detect_platform_from_url(target_url)
+        platform_selectors = {}
+        
+        if detected_platform:
+            print(f"  检测到平台: {detected_platform}")
+            platform_selectors = get_platform_selectors(detected_platform)
+            if platform_selectors:
+                print(f"  已加载 {len(platform_selectors)} 个平台特定字段选择器")
+        
+        form_filler = FormFiller(browser_manager, resume_data, platform_selectors)
         
         results = form_filler.fill_all()
         

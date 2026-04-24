@@ -11,6 +11,7 @@ from models import LocatedField
 
 class FieldLocator:
     LABEL_INPUT_STRATEGIES = [
+        ("platform_selector", "平台特定选择器（优先）"),
         ("label_by_text", "通过label文本匹配"),
         ("label_for_attribute", "通过label的for属性匹配"),
         ("aria_labelledby", "通过aria-labelledby匹配"),
@@ -34,9 +35,14 @@ class FieldLocator:
         "textarea": ["textarea"],
     }
     
-    def __init__(self, page):
+    def __init__(self, page, platform_selectors: Dict[str, List[str]] = None):
         self.page = page
         self._frame_contexts = []
+        self._cache = {}
+        self._platform_selectors = platform_selectors or {}
+    
+    def set_platform_selectors(self, selectors: Dict[str, List[str]]):
+        self._platform_selectors = selectors
         self._cache = {}
     
     def locate_field(self, field_name: str, label_texts: List[str] = None) -> Optional[LocatedField]:
@@ -80,6 +86,7 @@ class FieldLocator:
         strategy: str
     ) -> Optional[LocatedField]:
         strategies = {
+            "platform_selector": self._locate_by_platform_selector,
             "label_by_text": self._locate_by_label_text,
             "label_for_attribute": self._locate_by_label_for,
             "aria_labelledby": self._locate_by_aria_labelledby,
@@ -92,6 +99,32 @@ class FieldLocator:
         
         if strategy in strategies:
             return strategies[strategy](context, field_name, label_texts)
+        
+        return None
+    
+    def _locate_by_platform_selector(self, context, field_name: str, label_texts: List[str]) -> Optional[LocatedField]:
+        if not self._platform_selectors:
+            return None
+        
+        selectors = self._platform_selectors.get(field_name, [])
+        if not selectors:
+            return None
+        
+        for selector in selectors:
+            try:
+                elements = context.query_selector_all(selector)
+                for element in elements:
+                    if self._is_interactive_element(element):
+                        return LocatedField(
+                            field_name=field_name,
+                            selector=selector,
+                            label_text=label_texts[0] if label_texts else None,
+                            input_type=self._get_input_type(element),
+                            element_handle=element,
+                            is_required=self._check_required(element)
+                        )
+            except Exception:
+                continue
         
         return None
     

@@ -53,38 +53,74 @@ class BaseParser(ABC):
             r'1[3-9]\d{9}',
             r'\+?86[-\s]?1[3-9]\d{9}',
             r'\d{3}[-\s]?\d{4}[-\s]?\d{4}',
+            r'手机[：:]\s*([1][3-9]\d{9})',
+            r'电话[：:]\s*([1][3-9]\d{9})',
+            r'联系电话[：:]\s*([1][3-9]\d{9})',
+            r'mobile[：:\s]+([1][3-9]\d{9})',
+            r'phone[：:\s]+([1][3-9]\d{9})',
         ]
         
         for pattern in phone_patterns:
             match = re.search(pattern, text)
             if match:
-                phone = match.group().replace('-', '').replace(' ', '').replace('+', '')
+                phone = match.group()
+                if match.lastindex and match.group(1):
+                    phone = match.group(1)
+                phone = phone.replace('-', '').replace(' ', '').replace('+', '')
                 if phone.startswith('86'):
                     phone = phone[2:]
-                return phone
+                if len(phone) == 11 and phone.startswith('1'):
+                    return phone
         return None
     
     def _extract_email(self, text: str) -> Optional[str]:
-        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-        match = re.search(email_pattern, text)
-        return match.group() if match else None
+        email_patterns = [
+            r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+            r'邮箱[：:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
+            r'email[：:\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
+            r'mail[：:\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',
+        ]
+        
+        for pattern in email_patterns:
+            match = re.search(pattern, text)
+            if match:
+                if match.lastindex and match.group(1):
+                    return match.group(1).strip()
+                return match.group()
+        return None
     
     def _extract_name(self, text: str, lines: List[str]) -> Optional[str]:
         name_patterns = [
             r'姓名[：:]\s*([^\s，。,；;\n\r]+)',
             r'名字[：:]\s*([^\s，。,；;\n\r]+)',
             r'^([\u4e00-\u9fa5]{2,4})$',
+            r'申请人[：:]\s*([^\s，。,；;\n\r]+)',
+            r'求职人[：:]\s*([^\s，。,；;\n\r]+)',
+            r'Name[：:\s]+([a-zA-Z\s]+)',
         ]
         
         for pattern in name_patterns:
             match = re.search(pattern, text)
             if match:
-                return match.group(1).strip()
+                name = match.group(1).strip()
+                if re.match(r'^[\u4e00-\u9fa5]{2,4}$', name):
+                    return name
+                if re.match(r'^[a-zA-Z\s]+$', name):
+                    return name
         
         if lines:
             first_line = lines[0].strip()
             if 2 <= len(first_line) <= 4 and re.match(r'^[\u4e00-\u9fa5]+$', first_line):
                 return first_line
+            
+            if len(lines) >= 2:
+                for line in lines[:3]:
+                    line = line.strip()
+                    if 2 <= len(line) <= 4 and re.match(r'^[\u4e00-\u9fa5]+$', line):
+                        phone_match = re.search(r'1[3-9]\d{9}', line)
+                        email_match = re.search(r'@', line)
+                        if not phone_match and not email_match:
+                            return line
         
         return None
     
@@ -92,24 +128,47 @@ class BaseParser(ABC):
         gender_patterns = [
             r'性别[：:]\s*(男|女)',
             r'\b(男|女)\b',
+            r'性别[：:]\s*(male|female)',
+            r'性别[：:]\s*(先生|女士)',
+            r'性别[：:]\s*(男|女|未知)',
         ]
         
         for pattern in gender_patterns:
-            matches = re.findall(pattern, text)
+            matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
-                return matches[0]
+                gender = matches[0]
+                if gender.lower() in ['male', '先生']:
+                    return '男'
+                elif gender.lower() in ['female', '女士']:
+                    return '女'
+                return gender
         return None
     
     def _extract_education(self, text: str) -> Optional[str]:
         education_keywords = [
             '博士', '硕士', '本科', '大专', '高中', '中专',
             '博士研究生', '硕士研究生', '研究生',
-            '学士', '专科'
+            '学士', '专科', '初中', '小学',
+            'PhD', 'Master', 'Bachelor', 'College',
         ]
         
+        education_order = [
+            '博士研究生', '硕士研究生', '博士', '硕士', 
+            '研究生', '本科', '学士', '大专', '专科',
+            '高中', '中专', '初中', '小学',
+            'PhD', 'Master', 'Bachelor', 'College',
+        ]
+        
+        found_educations = []
         for keyword in education_keywords:
             if keyword in text:
-                return keyword
+                found_educations.append(keyword)
+        
+        if found_educations:
+            for edu in education_order:
+                if edu in found_educations:
+                    return edu
+        
         return None
     
     def _split_by_sections(self, text: str) -> Dict[str, str]:
@@ -356,17 +415,37 @@ class BaseParser(ABC):
             r'技能[：:]\s*([^\n\r]+)',
             r'专业技能[：:]\s*([^\n\r]+)',
             r'掌握技能[：:]\s*([^\n\r]+)',
+            r'技术栈[：:]\s*([^\n\r]+)',
+            r'技术能力[：:]\s*([^\n\r]+)',
+            r'擅长领域[：:]\s*([^\n\r]+)',
+            r'核心技能[：:]\s*([^\n\r]+)',
+            r'熟练技能[：:]\s*([^\n\r]+)',
+            r'技能特长[：:]\s*([^\n\r]+)',
+            r'Skills[：:\s]+([^\n\r]+)',
+            r'Technical[：:\s]+([^\n\r]+)',
         ]
         
         for pattern in skill_patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 skill_text = match.group(1)
-                skill_list = re.split(r'[,，、\s;；]+', skill_text)
-                skills.extend([s.strip() for s in skill_list if s.strip()])
-                break
+                skill_list = re.split(r'[,，、\s;；·]+', skill_text)
+                skills.extend([s.strip() for s in skill_list if s.strip() and len(s.strip()) > 1])
         
-        return skills
+        common_skills = [
+            'Python', 'Java', 'C++', 'C#', 'JavaScript', 'TypeScript', 'Go', 'Rust', 'PHP',
+            'React', 'Vue', 'Angular', 'Node.js', 'Django', 'Flask', 'Spring', 'SpringBoot',
+            'MySQL', 'PostgreSQL', 'Oracle', 'MongoDB', 'Redis', 'Elasticsearch',
+            'Docker', 'Kubernetes', 'AWS', 'Linux', 'Git', 'SVN',
+            '机器学习', '深度学习', '人工智能', '数据挖掘', '数据分析',
+            'UI设计', 'UX设计', '产品经理', '项目管理',
+        ]
+        
+        for skill in common_skills:
+            if skill in text and skill not in skills:
+                skills.append(skill)
+        
+        return list(set(skills))
 
 
 class PDFParser(BaseParser):

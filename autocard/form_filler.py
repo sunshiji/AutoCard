@@ -35,19 +35,26 @@ class FormFiller:
     def __init__(
         self,
         browser_manager: BrowserManager,
-        resume_data: ResumeData
+        resume_data: ResumeData,
+        platform_selectors: Dict[str, List[str]] = None
     ):
         self.browser_manager = browser_manager
         self.page = browser_manager.page
         self.resume_data = resume_data
+        self._platform_selectors = platform_selectors or {}
         
-        self.field_locator = FieldLocator(self.page)
+        self.field_locator = FieldLocator(self.page, self._platform_selectors)
         self.interaction_handler = InteractionHandler(self.page)
         self.anti_detection = AntiDetection(self.page, AntiDetectionConfig())
         self.form_validator = FormValidator(self.page)
         
         self.progress = FillProgress()
         self._fill_results: List[FillResult] = []
+    
+    def set_platform_selectors(self, selectors: Dict[str, List[str]]):
+        self._platform_selectors = selectors
+        if self.field_locator:
+            self.field_locator.set_platform_selectors(selectors)
     
     def fill_personal_info(self) -> List[FillResult]:
         self.progress.current_section = "个人信息"
