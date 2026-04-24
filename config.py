@@ -55,6 +55,39 @@ class Config:
             "login_url": "https://www.zhipin.com/",
             "resume_url": "https://www.zhipin.com/geek/new/index/resume",
             "field_selectors": {}
+        },
+        "beisen": {
+            "name": "北森招聘系统",
+            "login_url": "",
+            "resume_url": "",
+            "field_selectors": {
+                "name": ["input[name*='name']", "input[name*='realName']", "input[name*='username']", "input[placeholder*='姓名']"],
+                "phone": ["input[name*='phone']", "input[name*='mobile']", "input[name*='telephone']", "input[placeholder*='手机']"],
+                "email": ["input[name*='email']", "input[name*='mail']", "input[placeholder*='邮箱']"],
+                "gender": ["select[name*='gender']", "select[name*='sex']", "input[name*='gender'][type='radio']"],
+                "birthday": ["input[name*='birthday']", "input[name*='birthDate']", "input[placeholder*='生日']"],
+                "school": ["input[name*='school']", "input[name*='university']", "input[name*='college']", "input[placeholder*='学校']"],
+                "major": ["input[name*='major']", "input[placeholder*='专业']"],
+                "education": ["select[name*='education']", "select[name*='degree']"],
+                "company": ["input[name*='company']", "input[name*='enterprise']", "input[placeholder*='公司']"],
+                "position": ["input[name*='position']", "input[name*='post']", "input[name*='jobTitle']"],
+                "start_date": ["input[name*='startDate']", "input[name*='beginDate']", "input[placeholder*='开始']"],
+                "end_date": ["input[name*='endDate']", "input[name*='finishDate']", "input[placeholder*='结束']"],
+            },
+            "login_indicators": [
+                "text:登录",
+                "text:扫码登录",
+                "text:微信登录",
+                "selector:input[type='password']",
+                "selector:button:has-text('登录')",
+            ],
+            "logged_in_indicators": [
+                "text:退出",
+                "text:注销",
+                "text:我的简历",
+                "selector:.avatar",
+                "selector:.user-info",
+            ]
         }
     }
     
