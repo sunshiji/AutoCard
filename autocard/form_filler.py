@@ -300,6 +300,7 @@ class FormFiller:
         try:
             context = located.frame_context or self.page
             selector = located.selector
+            input_type = located.input_type
             
             self.anti_detection.random_pause_between_actions()
             
@@ -315,16 +316,31 @@ class FormFiller:
             
             self._wait_for_overlay(element)
             
-            element.scroll_into_view_if_needed()
-            self.anti_detection.random_delay(0.1, 0.3)
-            
-            click_success = self._safe_click(element, field_name)
-            if not click_success:
-                print(f"  [警告] 点击字段 {field_name} 可能失败，尝试直接输入...")
+            is_in_viewport = self._check_element_in_viewport(element)
+            if not is_in_viewport:
+                print(f"  [提示] 字段 {field_name} 不在视口内，尝试滚动...")
+                scroll_success = self._force_scroll_into_view(element)
+                if not scroll_success:
+                    print(f"  [警告] 滚动可能失败，继续尝试...")
             
             self.anti_detection.random_delay(0.1, 0.2)
             
-            fill_success = self._safe_fill_input(element, str(value))
+            fill_success = False
+            
+            if input_type in ['text', 'email', 'tel', 'password', 'number', 'date', 'textarea']:
+                print(f"  [提示] 使用直接填充策略 (input_type={input_type}): {field_name}")
+                fill_success = self._fill_input_direct(element, str(value))
+            elif input_type == 'select':
+                print(f"  [提示] 使用选择框策略: {field_name}")
+                fill_success = self._fill_select_field(element, str(value))
+            else:
+                print(f"  [提示] 使用通用点击+填充策略 (input_type={input_type}): {field_name}")
+                click_success = self._safe_click(element, field_name)
+                if not click_success:
+                    print(f"  [警告] 点击字段 {field_name} 可能失败，尝试直接输入...")
+                self.anti_detection.random_delay(0.1, 0.2)
+                fill_success = self._safe_fill_input(element, str(value))
+            
             if not fill_success:
                 return FillResult(
                     success=False,
@@ -351,6 +367,134 @@ class FormFiller:
                 error_message=str(e),
                 selector_used=located.selector
             )
+    
+    def _check_element_in_viewport(self, element) -> bool:
+        try:
+            return element.evaluate("""
+                el => {
+                    const rect = el.getBoundingClientRect();
+                    const windowHeight = window.innerHeight || document.documentElement.clientHeight;
+                    const windowWidth = window.innerWidth || document.documentElement.clientWidth;
+                    
+                    const isVisible = (
+                        rect.top >= 0 &&
+                        rect.left >= 0 &&
+                        rect.bottom <= windowHeight &&
+                        rect.right <= windowWidth
+                    );
+                    
+                    return isVisible;
+                }
+            """)
+        except Exception:
+            return False
+    
+    def _force_scroll_into_view(self, element) -> bool:
+        try:
+            element.evaluate("""
+                el => {
+                    el.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center',
+                        inline: 'nearest'
+                    });
+                    
+                    let parent = el.parentElement;
+                    while (parent) {
+                        const parentStyle = window.getComputedStyle(parent);
+                        if (parentStyle.overflow === 'auto' || 
+                            parentStyle.overflow === 'scroll' ||
+                            parentStyle.overflowY === 'auto' ||
+                            parentStyle.overflowY === 'scroll') {
+                            el.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'center',
+                                inline: 'nearest'
+                            });
+                        }
+                        parent = parent.parentElement;
+                    }
+                    
+                    return true;
+                }
+            """)
+            return True
+        except Exception:
+            return False
+    
+    def _fill_input_direct(self, element, value: str) -> bool:
+        strategies = [
+            ("js_set_value_with_events", self._fill_js_with_events),
+            ("js_set_value_simple", self._fill_js_set_value),
+            ("playwright_type", self._fill_type),
+            ("playwright_fill", self._fill_playwright),
+        ]
+        
+        for strategy_name, strategy_func in strategies:
+            try:
+                success = strategy_func(element, value)
+                if success:
+                    if strategy_name != "playwright_fill" and strategy_name != "playwright_type":
+                        print(f"  [提示] 使用策略 '{strategy_name}' 填充成功")
+                    return True
+                self.anti_detection.random_delay(0.05, 0.1)
+            except Exception as e:
+                print(f"  [调试] 策略 '{strategy_name}' 失败: {e}")
+                continue
+        
+        return False
+    
+    def _fill_select_field(self, element, value: str) -> bool:
+        try:
+            success = element.evaluate(f"""
+                el => {{
+                    const options = el.querySelectorAll('option');
+                    const targetValue = {json.dumps(value)};
+                    
+                    for (let opt of options) {{
+                        const optText = (opt.textContent || '').trim();
+                        const optValue = (opt.value || '').trim();
+                        
+                        if (optValue === targetValue || 
+                            optText === targetValue ||
+                            optText.includes(targetValue) ||
+                            targetValue.includes(optText)) {{
+                            opt.selected = true;
+                            
+                            const inputEvent = new Event('input', {{ bubbles: true }});
+                            const changeEvent = new Event('change', {{ bubbles: true }});
+                            el.dispatchEvent(inputEvent);
+                            el.dispatchEvent(changeEvent);
+                            
+                            return true;
+                        }}
+                    }}
+                    
+                    return false;
+                }}
+            """)
+            
+            if success:
+                return True
+            
+            print(f"  [提示] JavaScript 选择失败，尝试 Playwright 原生方法...")
+            try:
+                element.select_option(label=value)
+                return True
+            except Exception:
+                pass
+            
+            try:
+                element.select_option(value=value)
+                return True
+            except Exception:
+                pass
+            
+            return False
+            
+        except Exception as e:
+            print(f"  [调试] 选择框填充失败: {e}")
+            return False
     
     def _safe_click(self, element, field_name: str) -> bool:
         click_strategies = [
