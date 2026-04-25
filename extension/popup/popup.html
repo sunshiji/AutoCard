@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoCard - 简历自动填写助手</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      width: 420px;
+      min-height: 500px;
+      background: #f5f7fa;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      color: white;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .header p {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .container {
+      padding: 16px;
+    }
+    
+    .section {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      background: #f0f0f0;
+      color: #666;
+    }
+    
+    .status-badge.ready {
+      background: #f6ffed;
+      color: #52c41a;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+    }
+    
+    .status-badge.ready .status-dot {
+      background: #52c41a;
+    }
+    
+    .btn {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+    }
+    
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%);
+      color: white;
+    }
+    
+    .btn-warning {
+      background: linear-gradient(135deg, #faad14 0%, #ffc53d 100%);
+      color: white;
+    }
+    
+    .btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    
+    .btn-group.triple {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    
+    .file-input {
+      display: none;
+    }
+    
+    .file-label {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      border: 2px dashed #d9d9d9;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: #666;
+      font-size: 13px;
+    }
+    
+    .file-label:hover {
+      border-color: #667eea;
+      color: #667eea;
+    }
+    
+    .file-label .icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .form-group {
+      margin-bottom: 12px;
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #d9d9d9;
+      border-radius: 6px;
+      font-size: 13px;
+      transition: border-color 0.2s;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .form-textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: inherit;
+    }
+    
+    .divider {
+      height: 1px;
+      background: #e8e8e8;
+      margin: 16px 0;
+    }
+    
+    .tabs {
+      display: flex;
+      background: #f0f0f0;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 12px;
+    }
+    
+    .tab {
+      flex: 1;
+      padding: 8px;
+      text-align: center;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #666;
+      transition: all 0.2s;
+    }
+    
+    .tab.active {
+      background: white;
+      color: #333;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .history-list {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .history-item {
+      padding: 10px;
+      background: #fafafa;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    
+    .history-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .history-time {
+      color: #888;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    
+    .history-action {
+      color: #333;
+      font-weight: 500;
+    }
+    
+    .history-stats {
+      color: #666;
+      margin-top: 4px;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 24px;
+      color: #888;
+      font-size: 13px;
+    }
+    
+    .empty-state .icon {
+      font-size: 40px;
+      margin-bottom: 8px;
+    }
+    
+    .data-summary {
+      background: #fafafa;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    
+    .data-summary-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+    
+    .data-summary-item:not(:last-child) {
+      border-bottom: 1px solid #e8e8e8;
+    }
+    
+    .data-summary-label {
+      color: #666;
+    }
+    
+    .data-summary-value {
+      color: #333;
+      font-weight: 500;
+    }
+    
+    .footer {
+      text-align: center;
+      padding: 12px;
+      color: #888;
+      font-size: 11px;
+    }
+    
+    .footer a {
+      color: #667eea;
+      text-decoration: none;
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #ffffff30;
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📝 AutoCard</h1>
+    <p>简历自动填写助手</p>
+  </div>
+  
+  <div class="container">
+    <div class="tabs">
+      <div class="tab active" data-tab="resume">📄 简历</div>
+      <div class="tab" data-tab="action">⚡ 操作</div>
+      <div class="tab" data-tab="history">📊 历史</div>
+    </div>
+    
+    <div id="tab-resume" class="tab-content active">
+      <div class="section">
+        <div class="section-title">📁 简历数据</div>
+        <div id="data-status" style="margin-bottom: 12px;">
+          <span class="status-badge">
+            <span class="status-dot"></span>
+            <span id="status-text">未加载简历数据</span>
+          </span>
+        </div>
+        
+        <label for="file-input" class="file-label">
+          <span class="icon">📎</span>
+          <span>点击上传简历文件 (PDF/DOCX)</span>
+          <span style="font-size: 11px; color: #999; margin-top: 4px;">或粘贴 JSON 数据</span>
+        </label>
+        <input type="file" id="file-input" class="file-input" accept=".pdf,.docx,.json">
+        
+        <div class="btn-group" style="margin-top: 12px;">
+          <button class="btn btn-secondary" id="btn-paste-json">
+            📋 粘贴 JSON
+          </button>
+          <button class="btn btn-secondary" id="btn-manual-input">
+            ✏️ 手动输入
+          </button>
+        </div>
+      </div>
+      
+      <div class="section" id="data-summary-section" style="display: none;">
+        <div class="section-title">📊 数据摘要</div>
+        <div id="data-summary" class="data-summary">
+        </div>
+        <div class="btn-group" style="margin-top: 12px;">
+          <button class="btn btn-warning" id="btn-edit-data">
+            ✏️ 编辑数据
+          </button>
+          <button class="btn btn-secondary" id="btn-clear-data">
+            🗑️ 清除数据
+          </button>
+        </div>
+      </div>
+      
+      <div class="section" id="platform-section">
+        <div class="section-title">🌐 当前页面</div>
+        <div id="platform-info" class="empty-state">
+          <div class="icon">🔍</div>
+          <div>请在求职网站页面使用</div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="tab-action" class="tab-content">
+      <div class="section">
+        <div class="section-title">⚡ 快捷操作</div>
+        
+        <button class="btn btn-success" id="btn-fill-all" style="margin-bottom: 10px; height: 44px;">
+          ✨ 智能填写全部
+        </button>
+        
+        <div class="btn-group">
+          <button class="btn btn-secondary" id="btn-fill-personal">
+            👤 个人信息
+          </button>
+          <button class="btn btn-secondary" id="btn-fill-education">
+            🎓 教育经历
+          </button>
+          <button class="btn btn-secondary" id="btn-fill-work">
+            💼 工作经历
+          </button>
+          <button class="btn btn-secondary" id="btn-fill-project">
+            🚀 项目经历
+          </button>
+          <button class="btn btn-secondary" id="btn-fill-skills">
+            🛠 技能
+          </button>
+          <button class="btn btn-secondary" id="btn-show-panel">
+            🪟 显示面板
+          </button>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">⚙️ 设置</div>
+        <div class="form-group">
+          <label class="form-label">输入延迟 (毫秒)</label>
+          <input type="number" class="form-input" id="input-delay" value="150" min="0" max="1000">
+        </div>
+        <div class="form-group">
+          <label class="form-label">点击延迟 (毫秒)</label>
+          <input type="number" class="form-input" id="click-delay" value="300" min="0" max="1000">
+        </div>
+        <div class="form-group">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="anti-detection" checked>
+            <span class="form-label" style="margin: 0;">启用反检测措施</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    
+    <div id="tab-history" class="tab-content">
+      <div class="section">
+        <div class="section-title">📊 填写历史</div>
+        <div id="history-list" class="history-list">
+          <div class="empty-state">
+            <div class="icon">📭</div>
+            <div>暂无填写记录</div>
+          </div>
+        </div>
+        <button class="btn btn-secondary" id="btn-clear-history" style="margin-top: 12px;">
+          🗑️ 清除历史
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer">
+    AutoCard v1.0.0 | 简历自动填写助手
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

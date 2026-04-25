@@ -341,65 +341,6 @@ class FormFiller:
                 self.anti_detection.random_delay(0.1, 0.2)
                 fill_success = self._safe_fill_input(element, str(value))
             
-            return FillResult(
-                success=fill_success,
-                field_name=field_name,
-                value=value,
-                error_message=None if fill_success else "填充失败",
-                selector_used=selector
-            )
-            
-        except Exception as e:
-            return FillResult(
-                success=False,
-                field_name=field_name,
-                value=value,
-                error_message=str(e),
-                selector_used=located.selector if located else None
-            )
-            context = located.frame_context or self.page
-            selector = located.selector
-            input_type = located.input_type
-            
-            self.anti_detection.random_pause_between_actions()
-            
-            element = context.query_selector(selector)
-            if not element:
-                return FillResult(
-                    success=False,
-                    field_name=field_name,
-                    value=value,
-                    error_message=f"元素不存在: {selector}",
-                    selector_used=selector
-                )
-            
-            self._wait_for_overlay(element)
-            
-            is_in_viewport = self._check_element_in_viewport(element)
-            if not is_in_viewport:
-                print(f"  [提示] 字段 {field_name} 不在视口内，尝试滚动...")
-                scroll_success = self._force_scroll_into_view(element)
-                if not scroll_success:
-                    print(f"  [警告] 滚动可能失败，继续尝试...")
-            
-            self.anti_detection.random_delay(0.1, 0.2)
-            
-            fill_success = False
-            
-            if input_type in ['text', 'email', 'tel', 'password', 'number', 'date', 'textarea']:
-                print(f"  [提示] 使用直接填充策略 (input_type={input_type}): {field_name}")
-                fill_success = self._fill_input_direct(element, str(value))
-            elif input_type == 'select':
-                print(f"  [提示] 使用选择框策略: {field_name}")
-                fill_success = self._fill_select_field(element, str(value))
-            else:
-                print(f"  [提示] 使用通用点击+填充策略 (input_type={input_type}): {field_name}")
-                click_success = self._safe_click(element, field_name)
-                if not click_success:
-                    print(f"  [警告] 点击字段 {field_name} 可能失败，尝试直接输入...")
-                self.anti_detection.random_delay(0.1, 0.2)
-                fill_success = self._safe_fill_input(element, str(value))
-            
     def _fill_single_field(
         self, 
         field_name: str, 
