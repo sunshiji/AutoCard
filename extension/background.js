@@ -22,19 +22,16 @@ const PLATFORM_CONFIGS = {
   liepin: {
     name: '猎聘',
     patterns: ['liepin.com', 'liepin'],
-    loginIndicators: ['登录', '扫码登录', '微信登录', 'input[type="password"]'],
     fieldSelectors: {}
   },
   boss: {
     name: 'BOSS直聘',
     patterns: ['zhipin.com', 'boss'],
-    loginIndicators: ['登录', '扫码登录', '微信登录'],
     fieldSelectors: {}
   },
   beisen: {
     name: '北森招聘',
     patterns: ['zhiye.com', 'beisen', '北森'],
-    loginIndicators: ['登录', '扫码登录'],
     fieldSelectors: {
       name: ['input[name*="name"]', 'input[name*="realName"]', 'input[name*="username"]', 'input[placeholder*="姓名"]'],
       phone: ['input[name*="phone"]', 'input[name*="mobile"]', 'input[name*="telephone"]', 'input[placeholder*="手机"]'],
@@ -52,49 +49,89 @@ const PLATFORM_CONFIGS = {
   }
 };
 
-const FIELD_MAPPINGS = {
-  name: ['姓名', '名字', '真实姓名', 'name', 'fullName', 'realName'],
-  phone: ['手机号', '手机号码', '电话', '联系电话', '手机', 'phone', 'mobile', 'telephone'],
-  email: ['邮箱', '电子邮箱', 'email', 'mail'],
-  gender: ['性别', 'gender', 'sex'],
-  birthday: ['生日', '出生日期', '出生年月', 'birthday', 'birthDate'],
-  education: ['学历', '教育程度', 'education', 'degree'],
-  school: ['学校', '毕业院校', '院校', 'school', 'university', 'college'],
-  major: ['专业', '所学专业', 'major'],
-  startDate: ['开始时间', '起始时间', '入学时间', 'startDate', 'beginDate'],
-  endDate: ['结束时间', '终止时间', '毕业时间', 'endDate', 'finishDate'],
-  company: ['公司', '公司名称', '企业', 'company', 'enterprise', 'corporation'],
-  position: ['职位', '岗位', '职务', 'position', 'post', 'jobTitle'],
-  workDescription: ['工作描述', '工作内容', '职责描述', 'workDescription', 'jobDescription'],
-  projectName: ['项目名称', '项目名', 'projectName', 'project'],
-  projectRole: ['项目角色', '担任角色', 'projectRole', 'role'],
-  projectDescription: ['项目描述', '项目介绍', 'projectDescription'],
-  skill: ['技能', '专业技能', 'skill', 'ability', 'expertise'],
-  selfIntroduction: ['自我介绍', '个人简介', '自我评价', 'selfIntroduction', 'introduction', 'evaluation']
-};
-
-const CONFIG = {
-  inputDelayMin: 100,
-  inputDelayMax: 300,
-  clickDelayMin: 200,
-  clickDelayMax: 500,
-  elementWaitTimeout: 10000,
-  antiDetectionEnabled: true,
-  mouseMovementSimulation: true
-};
-
 let resumeData = null;
-let currentPlatform = null;
 let fillHistory = [];
+
+chrome.runtime.onInstalled.addListener(async () => {
+  console.log('[AutoCard] 插件已安装');
+  await loadResumeData();
+  await loadFillHistory();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('[AutoCard] 浏览器启动');
+  await loadResumeData();
+  await loadFillHistory();
+});
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[AutoCard] 收到消息:', request.action);
+  
+  switch (request.action) {
+    case 'getResumeData':
+      handleGetResumeData(sendResponse);
+      break;
+      
+    case 'saveResumeData':
+      handleSaveResumeData(request.data, sendResponse);
+      break;
+      
+    case 'saveFillHistory':
+      handleSaveFillHistory(request.data, sendResponse);
+      break;
+      
+    default:
+      sendResponse({ success: false, error: 'Unknown action' });
+  }
+  
+  return true;
+});
+
+async function handleGetResumeData(sendResponse) {
+  if (resumeData) {
+    sendResponse({ success: true, data: resumeData });
+  } else {
+    const data = await loadResumeData();
+    sendResponse({ success: true, data: data });
+  }
+}
+
+async function handleSaveResumeData(data, sendResponse) {
+  try {
+    resumeData = data;
+    await chrome.storage.local.set({ resumeData: data });
+    console.log('[AutoCard] 简历数据已保存');
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[AutoCard] 保存简历数据失败:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleSaveFillHistory(item, sendResponse) {
+  try {
+    fillHistory.unshift(item);
+    if (fillHistory.length > 100) {
+      fillHistory = fillHistory.slice(0, 100);
+    }
+    await chrome.storage.local.set({ fillHistory: fillHistory });
+    console.log('[AutoCard] 历史记录已保存');
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[AutoCard] 保存历史记录失败:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
 
 async function loadResumeData() {
   try {
     const result = await chrome.storage.local.get('resumeData');
     if (result.resumeData) {
-      resumeData = { ...DEFAULT_RESUME_DATA, ...result.resumeData };
+      resumeData = deepMerge(DEFAULT_RESUME_DATA, result.resumeData);
     } else {
       resumeData = JSON.parse(JSON.stringify(DEFAULT_RESUME_DATA));
     }
+    console.log('[AutoCard] 简历数据已加载');
     return resumeData;
   } catch (error) {
     console.error('[AutoCard] 加载简历数据失败:', error);
@@ -103,97 +140,17 @@ async function loadResumeData() {
   }
 }
 
-async function saveResumeData(data) {
-  try {
-    resumeData = data;
-    await chrome.storage.local.set({ resumeData: data });
-    return true;
-  } catch (error) {
-    console.error('[AutoCard] 保存简历数据失败:', error);
-    return false;
-  }
-}
-
-function detectPlatform(url) {
-  const urlLower = url.toLowerCase();
-  
-  for (const [platformKey, config] of Object.entries(PLATFORM_CONFIGS)) {
-    for (const pattern of config.patterns) {
-      if (urlLower.includes(pattern.toLowerCase())) {
-        currentPlatform = platformKey;
-        return platformKey;
-      }
-    }
-  }
-  
-  currentPlatform = null;
-  return null;
-}
-
-function getPlatformSelectors(platform) {
-  if (platform && PLATFORM_CONFIGS[platform]) {
-    return PLATFORM_CONFIGS[platform].fieldSelectors || {};
-  }
-  return {};
-}
-
-function getFieldMappings(fieldName) {
-  return FIELD_MAPPINGS[fieldName] || [fieldName];
-}
-
-async function addFillHistory(action) {
-  const historyItem = {
-    id: Date.now(),
-    timestamp: new Date().toISOString(),
-    ...action
-  };
-  
-  fillHistory.unshift(historyItem);
-  
-  if (fillHistory.length > 100) {
-    fillHistory = fillHistory.slice(0, 100);
-  }
-  
-  try {
-    await chrome.storage.local.set({ fillHistory: fillHistory });
-  } catch (error) {
-    console.error('[AutoCard] 保存历史记录失败:', error);
-  }
-  
-  return historyItem;
-}
-
-async function getFillHistory() {
-  if (fillHistory.length > 0) {
-    return fillHistory;
-  }
-  
+async function loadFillHistory() {
   try {
     const result = await chrome.storage.local.get('fillHistory');
     fillHistory = result.fillHistory || [];
+    console.log('[AutoCard] 历史记录已加载:', fillHistory.length, '条');
     return fillHistory;
   } catch (error) {
     console.error('[AutoCard] 加载历史记录失败:', error);
-    return [];
+    fillHistory = [];
+    return fillHistory;
   }
-}
-
-async function clearFillHistory() {
-  fillHistory = [];
-  try {
-    await chrome.storage.local.remove('fillHistory');
-    return true;
-  } catch (error) {
-    console.error('[AutoCard] 清除历史记录失败:', error);
-    return false;
-  }
-}
-
-function randomDelay(min, max) {
-  return new Promise(resolve => {
-    const delay = Math.random() * (max - min) + min;
-    setTimeout(resolve, delay);
-  });
 }
 
 function deepMerge(target, source) {
@@ -210,36 +167,4 @@ function deepMerge(target, source) {
   return result;
 }
 
-function isObjectEmpty(obj) {
-  if (!obj) return true;
-  return Object.keys(obj).every(key => {
-    const value = obj[key];
-    if (value === null || value === undefined || value === '') return true;
-    if (Array.isArray(value) && value.length === 0) return true;
-    if (typeof value === 'object' && !Array.isArray(value)) {
-      return isObjectEmpty(value);
-    }
-    return false;
-  });
-}
-
-export {
-  DEFAULT_RESUME_DATA,
-  PLATFORM_CONFIGS,
-  FIELD_MAPPINGS,
-  CONFIG,
-  resumeData,
-  currentPlatform,
-  fillHistory,
-  loadResumeData,
-  saveResumeData,
-  detectPlatform,
-  getPlatformSelectors,
-  getFieldMappings,
-  addFillHistory,
-  getFillHistory,
-  clearFillHistory,
-  randomDelay,
-  deepMerge,
-  isObjectEmpty
-};
+console.log('[AutoCard] background.js 已加载');
