@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 本地简历数据文件（不上传Git）
+data/
+resume_data*.json
+*.json
+!config*.json
+!settings*.json
+
+# 调试截图
+*.png
+*.jpg
+*.jpeg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 浏览器数据
+user_data/
+chrome_user_data/
+edge_user_data/
