@@ -52,56 +52,96 @@ const PLATFORM_CONFIGS = {
 let resumeData = null;
 let fillHistory = [];
 
-chrome.runtime.onInstalled.addListener(async () => {
-  console.log('[AutoCard] 插件已安装');
-  await loadResumeData();
-  await loadFillHistory();
-});
+async function init() {
+  console.log('[AutoCard] Background Service Worker 启动');
+  await loadDataFromStorage();
+  setupMessageListeners();
+}
 
-chrome.runtime.onStartup.addListener(async () => {
-  console.log('[AutoCard] 浏览器启动');
-  await loadResumeData();
-  await loadFillHistory();
-});
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('[AutoCard] 收到消息:', request.action);
-  
-  switch (request.action) {
-    case 'getResumeData':
-      handleGetResumeData(sendResponse);
-      break;
-      
-    case 'saveResumeData':
-      handleSaveResumeData(request.data, sendResponse);
-      break;
-      
-    case 'saveFillHistory':
-      handleSaveFillHistory(request.data, sendResponse);
-      break;
-      
-    default:
-      sendResponse({ success: false, error: 'Unknown action' });
-  }
-  
-  return true;
-});
-
-async function handleGetResumeData(sendResponse) {
-  if (resumeData) {
-    sendResponse({ success: true, data: resumeData });
-  } else {
-    const data = await loadResumeData();
-    sendResponse({ success: true, data: data });
+async function loadDataFromStorage() {
+  try {
+    const result = await chrome.storage.local.get(['resumeData', 'fillHistory']);
+    
+    if (result.resumeData) {
+      resumeData = deepMerge(DEFAULT_RESUME_DATA, result.resumeData);
+      console.log('[AutoCard] 已加载简历数据:', resumeData.personalInfo?.name || '空');
+    } else {
+      resumeData = JSON.parse(JSON.stringify(DEFAULT_RESUME_DATA));
+    }
+    
+    if (result.fillHistory) {
+      fillHistory = result.fillHistory;
+      console.log('[AutoCard] 已加载历史记录:', fillHistory.length, '条');
+    }
+  } catch (error) {
+    console.error('[AutoCard] 加载数据失败:', error);
+    resumeData = JSON.parse(JSON.stringify(DEFAULT_RESUME_DATA));
+    fillHistory = [];
   }
 }
 
-async function handleSaveResumeData(data, sendResponse) {
+function setupMessageListeners() {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('[AutoCard] Background 收到消息:', request.action, '来自:', sender.id);
+    
+    switch (request.action) {
+      case 'getResumeData':
+        handleGetResumeData(sendResponse);
+        break;
+        
+      case 'setResumeData':
+        handleSetResumeData(request.data, sendResponse);
+        break;
+        
+      case 'saveFillHistory':
+        handleSaveFillHistory(request.data, sendResponse);
+        break;
+        
+      case 'getFillHistory':
+        handleGetFillHistory(sendResponse);
+        break;
+        
+      case 'getPlatformConfigs':
+        handleGetPlatformConfigs(sendResponse);
+        break;
+        
+      case 'detectPlatform':
+        handleDetectPlatform(request.url, sendResponse);
+        break;
+        
+      default:
+        console.log('[AutoCard] 未知消息类型:', request.action);
+        sendResponse({ success: false, error: 'Unknown action: ' + request.action });
+    }
+    
+    return true;
+  });
+}
+
+async function handleGetResumeData(sendResponse) {
+  console.log('[AutoCard] 返回简历数据:', resumeData?.personalInfo?.name);
+  sendResponse({ 
+    success: true, 
+    data: resumeData,
+    hasData: resumeData && resumeData.personalInfo && resumeData.personalInfo.name !== null
+  });
+}
+
+async function handleSetResumeData(data, sendResponse) {
   try {
-    resumeData = data;
-    await chrome.storage.local.set({ resumeData: data });
-    console.log('[AutoCard] 简历数据已保存');
+    console.log('[AutoCard] 保存简历数据:', data?.personalInfo?.name);
+    
+    resumeData = deepMerge(DEFAULT_RESUME_DATA, data);
+    
+    await chrome.storage.local.set({ resumeData: resumeData });
+    
     sendResponse({ success: true });
+    
+    await broadcastToContentScripts({
+      action: 'resumeDataUpdated',
+      data: resumeData
+    });
+    
   } catch (error) {
     console.error('[AutoCard] 保存简历数据失败:', error);
     sendResponse({ success: false, error: error.message });
@@ -110,61 +150,95 @@ async function handleSaveResumeData(data, sendResponse) {
 
 async function handleSaveFillHistory(item, sendResponse) {
   try {
+    console.log('[AutoCard] 保存历史记录');
+    
     fillHistory.unshift(item);
     if (fillHistory.length > 100) {
       fillHistory = fillHistory.slice(0, 100);
     }
+    
     await chrome.storage.local.set({ fillHistory: fillHistory });
-    console.log('[AutoCard] 历史记录已保存');
+    
     sendResponse({ success: true });
+    
   } catch (error) {
     console.error('[AutoCard] 保存历史记录失败:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
 
-async function loadResumeData() {
-  try {
-    const result = await chrome.storage.local.get('resumeData');
-    if (result.resumeData) {
-      resumeData = deepMerge(DEFAULT_RESUME_DATA, result.resumeData);
-    } else {
-      resumeData = JSON.parse(JSON.stringify(DEFAULT_RESUME_DATA));
-    }
-    console.log('[AutoCard] 简历数据已加载');
-    return resumeData;
-  } catch (error) {
-    console.error('[AutoCard] 加载简历数据失败:', error);
-    resumeData = JSON.parse(JSON.stringify(DEFAULT_RESUME_DATA));
-    return resumeData;
-  }
+async function handleGetFillHistory(sendResponse) {
+  sendResponse({ success: true, data: fillHistory });
 }
 
-async function loadFillHistory() {
+async function handleGetPlatformConfigs(sendResponse) {
+  sendResponse({ success: true, data: PLATFORM_CONFIGS });
+}
+
+async function handleDetectPlatform(url, sendResponse) {
+  let detectedPlatform = null;
+  const urlLower = (url || '').toLowerCase();
+  
+  for (const [platformKey, config] of Object.entries(PLATFORM_CONFIGS)) {
+    for (const pattern of config.patterns) {
+      if (urlLower.includes(pattern.toLowerCase())) {
+        detectedPlatform = { key: platformKey, ...config };
+        console.log('[AutoCard] 检测到平台:', config.name);
+        break;
+      }
+    }
+    if (detectedPlatform) break;
+  }
+  
+  sendResponse({ success: true, platform: detectedPlatform });
+}
+
+async function broadcastToContentScripts(message) {
   try {
-    const result = await chrome.storage.local.get('fillHistory');
-    fillHistory = result.fillHistory || [];
-    console.log('[AutoCard] 历史记录已加载:', fillHistory.length, '条');
-    return fillHistory;
-  } catch (error) {
-    console.error('[AutoCard] 加载历史记录失败:', error);
-    fillHistory = [];
-    return fillHistory;
+    const tabs = await chrome.tabs.query({});
+    
+    for (const tab of tabs) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, message);
+      } catch (e) {
+      }
+    }
+  } catch (e) {
+    console.log('[AutoCard] 广播消息时部分标签页未响应');
   }
 }
 
 function deepMerge(target, source) {
+  if (!source) return { ...target };
+  if (!target) return { ...source };
+  
   const result = { ...target };
   
   for (const key in source) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      result[key] = deepMerge(target[key] || {}, source[key]);
-    } else if (source[key] !== undefined && source[key] !== null) {
-      result[key] = source[key];
+    if (source[key] !== undefined && source[key] !== null) {
+      if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+        result[key] = deepMerge(target[key] || {}, source[key]);
+      } else if (Array.isArray(source[key])) {
+        result[key] = [...source[key]];
+      } else {
+        result[key] = source[key];
+      }
     }
   }
   
   return result;
 }
 
-console.log('[AutoCard] background.js 已加载');
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('[AutoCard] 插件已安装/更新:', details.reason);
+  init();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  console.log('[AutoCard] 浏览器启动');
+  init();
+});
+
+init();
+
+console.log('[AutoCard] Background Service Worker 已初始化');

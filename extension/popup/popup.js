@@ -27,28 +27,45 @@
   
   document.addEventListener('DOMContentLoaded', init);
   
-  function init() {
-    loadStoredData();
-    loadCurrentTab();
+  async function init() {
+    console.log('[AutoCard] Popup 初始化');
+    await loadDataFromBackground();
+    await loadCurrentTab();
     bindEvents();
     updateUI();
   }
   
-  async function loadStoredData() {
+  async function loadDataFromBackground() {
     try {
-      const result = await chrome.storage.local.get(['resumeData', 'fillHistory']);
+      console.log('[AutoCard] 从 Background 加载数据...');
       
-      if (result.resumeData) {
-        resumeData = result.resumeData;
+      const resumeResponse = await chrome.runtime.sendMessage({
+        action: 'getResumeData'
+      });
+      
+      if (resumeResponse && resumeResponse.success) {
+        resumeData = resumeResponse.data;
+        console.log('[AutoCard] 已加载简历数据:', resumeData?.personalInfo?.name || '空');
       }
       
-      if (result.fillHistory) {
-        fillHistory = result.fillHistory;
+      const historyResponse = await chrome.runtime.sendMessage({
+        action: 'getFillHistory'
+      });
+      
+      if (historyResponse && historyResponse.success) {
+        fillHistory = historyResponse.data;
+        console.log('[AutoCard] 已加载历史记录:', fillHistory.length, '条');
       }
       
-      updateUI();
     } catch (e) {
-      console.error('[AutoCard] 加载存储数据失败:', e);
+      console.error('[AutoCard] 从 Background 加载数据失败:', e);
+      try {
+        const result = await chrome.storage.local.get(['resumeData', 'fillHistory']);
+        if (result.resumeData) resumeData = result.resumeData;
+        if (result.fillHistory) fillHistory = result.fillHistory;
+      } catch (e2) {
+        console.error('[AutoCard] 本地存储读取也失败:', e2);
+      }
     }
   }
   
@@ -57,6 +74,7 @@
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab) {
         currentTabId = tab.id;
+        console.log('[AutoCard] 当前标签页:', tab.id, tab.url);
         updatePlatformInfo(tab.url);
       }
     } catch (e) {
@@ -181,13 +199,15 @@
     const statusBadge = document.querySelector('#data-status .status-badge');
     const statusText = document.getElementById('status-text');
     
-    if (resumeData && resumeData.personalInfo) {
+    if (resumeData && resumeData.personalInfo && resumeData.personalInfo.name) {
       statusBadge.classList.add('ready');
-      const name = resumeData.personalInfo.name || '未设置';
+      const name = resumeData.personalInfo.name;
       statusText.textContent = `已加载 (${name})`;
+      console.log('[AutoCard] UI 状态: 数据已就绪');
     } else {
       statusBadge.classList.remove('ready');
       statusText.textContent = '未加载简历数据';
+      console.log('[AutoCard] UI 状态: 无数据');
     }
   }
   
@@ -339,8 +359,12 @@
       
       if (ext === '.json') {
         const text = await readFileAsText(file);
+        console.log('[AutoCard] 读取 JSON 文件成功:', text.substring(0, 100));
+        
         const data = JSON.parse(text);
-        setResumeData(data);
+        console.log('[AutoCard] 解析 JSON 成功:', data);
+        
+        await setResumeData(data);
         alert('JSON 文件加载成功！');
       } else if (ext === '.pdf' || ext === '.docx') {
         alert('简历文件解析功能需要配合解析库使用。\n\n请将简历转换为 JSON 格式，或使用手动输入功能。');
@@ -363,14 +387,18 @@
   }
   
   function handlePasteJson() {
-    const jsonStr = prompt('请粘贴简历 JSON 数据：');
+    const jsonStr = prompt('请粘贴简历 JSON 数据：\n\n示例格式：\n{"personalInfo":{"name":"张三","phone":"13800138000","email":"zhangsan@example.com"}}');
     if (jsonStr) {
       try {
+        console.log('[AutoCard] 用户输入的 JSON:', jsonStr);
         const data = JSON.parse(jsonStr);
+        console.log('[AutoCard] 解析成功:', data);
+        
         setResumeData(data);
         alert('JSON 数据加载成功！');
       } catch (e) {
-        alert('JSON 格式错误：' + e.message);
+        console.error('[AutoCard] JSON 解析失败:', e);
+        alert('JSON 格式错误：' + e.message + '\n\n请检查格式是否正确。');
       }
     }
   }
@@ -542,6 +570,8 @@
       const phone = document.getElementById('mi-phone').value.trim();
       const email = document.getElementById('mi-email').value.trim();
       
+      console.log('[AutoCard] 保存数据:', { name, phone, email });
+      
       if (!name) {
         alert('请输入姓名');
         return;
@@ -571,38 +601,58 @@
           .filter(s => s.trim())
       };
       
+      console.log('[AutoCard] 准备保存的数据:', newData);
+      
       setResumeData(newData);
       modal.remove();
       alert('数据保存成功！');
     });
   }
   
-  function setResumeData(data) {
+  async function setResumeData(data) {
+    console.log('[AutoCard] setResumeData 被调用:', data?.personalInfo?.name);
+    
     resumeData = data;
-    saveResumeData();
-    updateUI();
-    sendDataToContentScript();
-  }
-  
-  async function saveResumeData() {
-    try {
-      await chrome.storage.local.set({ resumeData: resumeData });
-      console.log('[AutoCard] 简历数据已保存');
-    } catch (e) {
-      console.error('[AutoCard] 保存简历数据失败:', e);
-    }
-  }
-  
-  async function sendDataToContentScript() {
-    if (!currentTabId) return;
     
     try {
-      await chrome.tabs.sendMessage(currentTabId, {
+      console.log('[AutoCard] 发送数据到 Background...');
+      
+      const response = await chrome.runtime.sendMessage({
         action: 'setResumeData',
-        data: resumeData
+        data: data
       });
+      
+      console.log('[AutoCard] Background 响应:', response);
+      
+      if (response && response.success) {
+        console.log('[AutoCard] 数据保存成功');
+      } else {
+        console.error('[AutoCard] Background 保存失败，尝试本地存储...');
+        await chrome.storage.local.set({ resumeData: data });
+      }
     } catch (e) {
-      console.log('[AutoCard] 无法发送数据到内容脚本:', e);
+      console.error('[AutoCard] 发送数据到 Background 失败:', e);
+      try {
+        await chrome.storage.local.set({ resumeData: data });
+        console.log('[AutoCard] 数据已保存到本地存储');
+      } catch (e2) {
+        console.error('[AutoCard] 本地存储也失败:', e2);
+      }
+    }
+    
+    updateUI();
+    
+    if (currentTabId) {
+      try {
+        console.log('[AutoCard] 发送数据到内容脚本...');
+        await chrome.tabs.sendMessage(currentTabId, {
+          action: 'setResumeData',
+          data: data
+        });
+        console.log('[AutoCard] 数据已发送到内容脚本');
+      } catch (e) {
+        console.log('[AutoCard] 内容脚本未响应（可能未加载）:', e);
+      }
     }
   }
   
@@ -633,8 +683,10 @@
   }
   
   async function executeFillAction(action) {
-    if (!resumeData) {
-      alert('请先加载简历数据！');
+    console.log('[AutoCard] executeFillAction:', action);
+    
+    if (!resumeData || !resumeData.personalInfo || !resumeData.personalInfo.name) {
+      alert('请先加载简历数据！\n\n点击"粘贴 JSON 数据"或"手动输入"来设置简历信息。');
       return;
     }
     
@@ -644,13 +696,19 @@
     }
     
     try {
+      console.log('[AutoCard] 发送消息到内容脚本:', currentTabId);
+      
       await chrome.tabs.sendMessage(currentTabId, {
-        action: action === 'fillAll' ? 'fillAll' : 'fillSection',
-        section: action === 'fillAll' ? null : action
+        action: 'executeFill',
+        fillAction: action,
+        resumeData: resumeData
       });
+      
+      console.log('[AutoCard] 消息已发送');
+      
     } catch (e) {
       console.error('[AutoCard] 执行填写操作失败:', e);
-      alert('执行失败：' + e.message + '\n\n请确保当前页面已加载 AutoCard 内容脚本。');
+      alert('执行失败：' + e.message + '\n\n请确保当前页面已刷新（内容脚本需要重新加载）。');
     }
   }
   
