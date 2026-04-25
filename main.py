@@ -13,6 +13,7 @@ from autocard.resume_parser import ResumeParser
 from autocard.browser_manager import BrowserManager, BrowserConfig
 from autocard.form_filler import FormFiller
 from autocard.anti_detection import AntiDetection
+from autocard.resume_data_manager import ResumeDataManager
 
 
 def parse_arguments():
@@ -22,21 +23,33 @@ def parse_arguments():
         epilog="""
 使用示例:
 
-  基本用法:
+  基本用法 (从简历文件解析):
     python main.py --resume resume.pdf --url "https://example.com/resume/edit"
 
+  使用本地 JSON 数据 (推荐，可复用):
+    python main.py --json-data data/resume_data.json --url "https://example.com/resume/edit"
+
+  手动录入简历数据 (首次使用或需要修改时):
+    python main.py --manual-input --url "https://example.com/resume/edit"
+
+  从简历文件解析后保存为 JSON (以便后续复用):
+    python main.py --resume resume.pdf --save-json --url "https://example.com/resume/edit"
+
   使用系统已安装的 Chrome/Edge (推荐，无需额外下载):
-    python main.py --resume resume.pdf --url "xxx" --use-system-browser
+    python main.py --json-data data/resume_data.json --url "xxx" --use-system-browser
 
   使用用户数据目录 (保持登录状态，不用每次登录):
-    python main.py --resume resume.pdf --url "xxx" --user-data-dir
+    python main.py --json-data data/resume_data.json --url "xxx" --user-data-dir
 
   指定浏览器路径:
-    python main.py --resume resume.pdf --url "xxx" --browser-path "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    python main.py --json-data data/resume_data.json --url "xxx" --browser-path "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
 
   通过 CDP 连接已运行的浏览器:
     1. 先启动 Chrome: chrome.exe --remote-debugging-port=9222
-    2. 然后运行: python main.py --resume resume.pdf --url "xxx" --cdp
+    2. 然后运行: python main.py --json-data data/resume_data.json --url "xxx" --cdp
+
+  仅管理简历数据 (不打开浏览器):
+    python main.py --manage-data
 
   使用国内镜像安装 Playwright 浏览器 (如需要):
     Windows CMD:
@@ -49,10 +62,34 @@ def parse_arguments():
         """
     )
     
-    parser.add_argument(
+    data_group = parser.add_argument_group("简历数据选项 (三选一)")
+    
+    data_group.add_argument(
         "--resume", "-r",
-        required=True,
         help="简历文件路径 (支持 .pdf, .docx)"
+    )
+    
+    data_group.add_argument(
+        "--json-data", "-j",
+        help="从 JSON 文件加载简历数据 (推荐，可复用)"
+    )
+    
+    data_group.add_argument(
+        "--manual-input", "-m",
+        action="store_true",
+        help="手动交互式录入简历数据"
+    )
+    
+    parser.add_argument(
+        "--save-json",
+        action="store_true",
+        help="将简历数据保存为 JSON 文件 (以便后续复用)"
+    )
+    
+    parser.add_argument(
+        "--manage-data",
+        action="store_true",
+        help="仅管理简历数据，不打开浏览器 (用于查看/编辑/保存数据)"
     )
     
     parser.add_argument(
@@ -554,56 +591,131 @@ def main():
     print("=" * 60)
     print("AutoCard - 自动化简历填写脚本")
     print("=" * 60)
-    print(f"简历文件: {args.resume}")
+    
+    data_manager = ResumeDataManager()
+    resume_data = None
+    data_source = ""
+    
+    if args.manage_data:
+        print("\n【数据管理模式】")
+        print("-" * 40)
+        
+        if data_manager.has_saved_data():
+            print(f"\n✓ 发现已保存的数据文件: {data_manager.data_file}")
+            resume_data = data_manager.load_from_json()
+            if resume_data:
+                print_resume_summary(resume_data)
+                
+                edit_choice = input("\n是否编辑现有数据？(y/n): ").strip().lower()
+                if edit_choice == 'y':
+                    resume_data = data_manager.manual_input(existing_data=resume_data)
+            else:
+                print("\n⚠ 数据文件加载失败，将创建新数据")
+                resume_data = data_manager.manual_input()
+        else:
+            print("\n⚠ 未找到已保存的数据文件")
+            create_choice = input("是否创建新的简历数据？(y/n): ").strip().lower()
+            if create_choice == 'y':
+                resume_data = data_manager.manual_input()
+        
+        if resume_data:
+            save_again = input("\n是否保存/更新数据？(y/n): ").strip().lower()
+            if save_again == 'y':
+                data_manager.save_to_json(resume_data)
+        
+        print("\n数据管理完成！")
+        return
+    
+    if args.json_data:
+        data_source = f"JSON文件: {args.json_data}"
+        print(f"数据来源: {data_source}")
+        
+        if not os.path.exists(args.json_data):
+            print(f"\n错误: JSON文件不存在: {args.json_data}")
+            sys.exit(1)
+        
+        resume_data = data_manager.load_from_json(args.json_data)
+        if not resume_data:
+            print("错误: 无法从JSON文件加载数据")
+            sys.exit(1)
+    
+    elif args.manual_input:
+        data_source = "手动录入"
+        print(f"数据来源: {data_source}")
+        
+        existing_data = None
+        if data_manager.has_saved_data():
+            print(f"\n✓ 发现已保存的数据文件: {data_manager.data_file}")
+            use_existing = input("是否基于现有数据进行编辑？(y/n): ").strip().lower()
+            if use_existing == 'y':
+                existing_data = data_manager.load_from_json()
+        
+        resume_data = data_manager.manual_input(existing_data=existing_data)
+    
+    elif args.resume:
+        data_source = f"简历文件: {args.resume}"
+        print(f"数据来源: {data_source}")
+        
+        if not os.path.exists(args.resume):
+            print(f"错误: 简历文件不存在: {args.resume}")
+            sys.exit(1)
+        
+        print("\n[解析简历数据...]")
+        resume_parser = ResumeParser()
+        
+        if not resume_parser.is_available(args.resume):
+            ext = os.path.splitext(args.resume)[1].lower()
+            if ext == '.pdf':
+                print("警告: pdfplumber 未安装，尝试使用备用方法...")
+                print("请运行: pip install pdfplumber")
+            elif ext in ['.docx', '.doc']:
+                print("警告: python-docx 未安装，尝试使用备用方法...")
+                print("请运行: pip install python-docx")
+        
+        try:
+            resume_data = resume_parser.parse(args.resume)
+            print(f"  ✓ 解析成功")
+            print_resume_summary(resume_data)
+            
+            if args.save_json:
+                print("\n[保存数据到JSON...]")
+                data_manager.save_to_json(resume_data)
+                
+        except Exception as e:
+            print(f"✗ 简历解析失败: {e}")
+            if args.debug:
+                import traceback
+                traceback.print_exc()
+            
+            manual_choice = input("\n是否手动录入简历数据？(y/n): ").strip().lower()
+            if manual_choice == 'y':
+                resume_data = data_manager.manual_input()
+            else:
+                sys.exit(1)
+    else:
+        print("\n错误: 请指定简历数据来源！")
+        print("  使用 --resume 指定简历文件")
+        print("  或使用 --json-data 指定JSON数据文件")
+        print("  或使用 --manual-input 手动录入")
+        print("  或使用 --manage-data 仅管理数据")
+        sys.exit(1)
+    
     print(f"目标平台: {args.platform}")
     print(f"浏览器模式: {'CDP 连接' if args.cdp else ('系统浏览器' if use_system_browser else 'Playwright 内置')}")
     print(f"无头模式: {args.headless}")
     print("=" * 60)
     
-    if not os.path.exists(args.resume):
-        print(f"错误: 简历文件不存在: {args.resume}")
-        sys.exit(1)
-    
-    print("\n[1/5] 解析简历数据...")
-    resume_parser = ResumeParser()
-    
-    if not resume_parser.is_available(args.resume):
-        ext = os.path.splitext(args.resume)[1].lower()
-        if ext == '.pdf':
-            print("警告: pdfplumber 未安装，尝试使用备用方法...")
-            print("请运行: pip install pdfplumber")
-        elif ext in ['.docx', '.doc']:
-            print("警告: python-docx 未安装，尝试使用备用方法...")
-            print("请运行: pip install python-docx")
-    
-    try:
-        resume_data = resume_parser.parse(args.resume)
-        print(f"  ✓ 解析成功")
-        print(f"  - 姓名: {resume_data.personal_info.name or '未识别'}")
-        print(f"  - 手机: {resume_data.personal_info.phone or '未识别'}")
-        print(f"  - 邮箱: {resume_data.personal_info.email or '未识别'}")
-        print(f"  - 教育经历: {len(resume_data.education_experiences)} 条")
-        print(f"  - 工作经历: {len(resume_data.work_experiences)} 条")
-        print(f"  - 项目经历: {len(resume_data.project_experiences)} 条")
-        print(f"  - 技能: {len(resume_data.skills)} 个")
-    except Exception as e:
-        print(f"✗ 简历解析失败: {e}")
-        if args.debug:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
-    
     target_url = args.url
     if not target_url and args.platform != "custom":
         target_url = get_platform_url(args.platform)
         if target_url:
-            print(f"\n[2/5] 使用平台预设URL: {target_url}")
+            print(f"\n[使用平台预设URL: {target_url}]")
     
     if not target_url:
         print("\n错误: 未提供目标URL，请使用 --url 参数指定")
         sys.exit(1)
     
-    print("\n[2/5] 准备浏览器...")
+    print("\n[准备浏览器...]")
     
     user_data_dir = None
     if args.user_data_dir:
@@ -635,12 +747,12 @@ def main():
         print("  ✓ 浏览器启动成功")
         
         if not args.no_anti_detection:
-            print("\n[3/5] 应用反检测措施...")
+            print("\n[应用反检测措施...]")
             anti_detection = AntiDetection(page)
             anti_detection.apply_all_measures()
             print("  ✓ 反检测措施已应用")
         
-        print(f"\n[4/5] 智能导航到目标页面...")
+        print(f"\n[智能导航到目标页面...]")
         
         smart_navigator = SmartNavigator(browser_manager)
         nav_success = smart_navigator.navigate_with_login_handling(target_url)
@@ -658,7 +770,7 @@ def main():
             print("\n按回车键继续填写表单...")
             input()
         
-        print("\n[5/5] 开始填写表单...")
+        print("\n[开始填写表单...]")
         
         detected_platform = detect_platform_from_url(target_url)
         platform_selectors = {}
@@ -705,6 +817,18 @@ def main():
         print("\n关闭浏览器...")
         browser_manager.close()
         print("完成!")
+
+
+def print_resume_summary(resume_data):
+    print("\n简历数据摘要:")
+    print(f"  - 姓名: {resume_data.personal_info.name or '未填写'}")
+    print(f"  - 手机: {resume_data.personal_info.phone or '未填写'}")
+    print(f"  - 邮箱: {resume_data.personal_info.email or '未填写'}")
+    print(f"  - 性别: {resume_data.personal_info.gender or '未填写'}")
+    print(f"  - 教育经历: {len(resume_data.education_experiences)} 条")
+    print(f"  - 工作经历: {len(resume_data.work_experiences)} 条")
+    print(f"  - 项目经历: {len(resume_data.project_experiences)} 条")
+    print(f"  - 技能: {len(resume_data.skills)} 个")
 
 
 if __name__ == "__main__":

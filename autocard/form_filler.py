@@ -3,6 +3,7 @@ import sys
 import random
 import time
 import re
+import json
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -317,21 +318,21 @@ class FormFiller:
             element.scroll_into_view_if_needed()
             self.anti_detection.random_delay(0.1, 0.3)
             
-            try:
-                element.click(timeout=5000)
-            except Exception as click_error:
-                if "intercept" in str(click_error).lower() or "pointer" in str(click_error).lower():
-                    print(f"  [提示] 点击被拦截，尝试使用JavaScript点击: {field_name}")
-                    element.evaluate("el => el.click()")
-                else:
-                    raise click_error
+            click_success = self._safe_click(element, field_name)
+            if not click_success:
+                print(f"  [警告] 点击字段 {field_name} 可能失败，尝试直接输入...")
             
             self.anti_detection.random_delay(0.1, 0.2)
             
-            element.evaluate("el => el.value = ''")
-            self.anti_detection.random_delay(0.05, 0.1)
-            
-            self.anti_detection.simulate_human_typing(element, str(value))
+            fill_success = self._safe_fill_input(element, str(value))
+            if not fill_success:
+                return FillResult(
+                    success=False,
+                    field_name=field_name,
+                    value=value,
+                    error_message=f"无法填充字段: {field_name}",
+                    selector_used=selector
+                )
             
             self.anti_detection.random_delay(0.1, 0.2)
             
@@ -350,6 +351,146 @@ class FormFiller:
                 error_message=str(e),
                 selector_used=located.selector
             )
+    
+    def _safe_click(self, element, field_name: str) -> bool:
+        click_strategies = [
+            ("playwright_click", self._click_playwright),
+            ("js_click", self._click_js),
+            ("js_dispatch_click", self._click_dispatch_event),
+            ("js_focus_only", self._focus_only),
+        ]
+        
+        for strategy_name, strategy_func in click_strategies:
+            try:
+                success = strategy_func(element)
+                if success:
+                    if strategy_name != "playwright_click":
+                        print(f"  [提示] 使用备用策略 '{strategy_name}' 点击: {field_name}")
+                    return True
+                self.anti_detection.random_delay(0.05, 0.1)
+            except Exception as e:
+                print(f"  [调试] 策略 '{strategy_name}' 失败: {e}")
+                continue
+        
+        return False
+    
+    def _click_playwright(self, element) -> bool:
+        try:
+            element.click(timeout=3000, force=False)
+            return True
+        except Exception as click_error:
+            error_msg = str(click_error).lower()
+            if "intercept" in error_msg or "pointer" in error_msg or "clickable" in error_msg:
+                return False
+            raise click_error
+    
+    def _click_js(self, element) -> bool:
+        try:
+            element.evaluate("el => el.click()")
+            return True
+        except Exception:
+            return False
+    
+    def _click_dispatch_event(self, element) -> bool:
+        try:
+            element.evaluate("""
+                el => {
+                    const events = ['mousedown', 'mouseup', 'click', 'focus'];
+                    events.forEach(eventName => {
+                        const evt = new MouseEvent(eventName, {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        el.dispatchEvent(evt);
+                    });
+                    return true;
+                }
+            """)
+            return True
+        except Exception:
+            return False
+    
+    def _focus_only(self, element) -> bool:
+        try:
+            element.evaluate("el => el.focus()")
+            return True
+        except Exception:
+            return False
+    
+    def _safe_fill_input(self, element, value: str) -> bool:
+        fill_strategies = [
+            ("playwright_fill", self._fill_playwright),
+            ("playwright_type", self._fill_type),
+            ("js_set_value", self._fill_js_set_value),
+            ("js_set_value_with_events", self._fill_js_with_events),
+        ]
+        
+        for strategy_name, strategy_func in fill_strategies:
+            try:
+                success = strategy_func(element, value)
+                if success:
+                    if strategy_name not in ["playwright_fill", "playwright_type"]:
+                        pass
+                    return True
+                self.anti_detection.random_delay(0.05, 0.1)
+            except Exception:
+                continue
+        
+        return False
+    
+    def _fill_playwright(self, element, value: str) -> bool:
+        try:
+            element.evaluate("el => el.value = ''")
+            self.anti_detection.random_delay(0.05, 0.1)
+            element.fill(value)
+            return True
+        except Exception:
+            return False
+    
+    def _fill_type(self, element, value: str) -> bool:
+        try:
+            element.evaluate("el => el.value = ''")
+            self.anti_detection.random_delay(0.05, 0.1)
+            self.anti_detection.simulate_human_typing(element, value)
+            return True
+        except Exception:
+            return False
+    
+    def _fill_js_set_value(self, element, value: str) -> bool:
+        try:
+            element.evaluate(f"""
+                el => {{
+                    el.value = '';
+                    el.value = {json.dumps(value)};
+                    return true;
+                }}
+            """)
+            return True
+        except Exception:
+            return False
+    
+    def _fill_js_with_events(self, element, value: str) -> bool:
+        try:
+            element.evaluate(f"""
+                el => {{
+                    el.value = '';
+                    el.value = {json.dumps(value)};
+                    
+                    const inputEvent = new Event('input', {{ bubbles: true }});
+                    const changeEvent = new Event('change', {{ bubbles: true }});
+                    const blurEvent = new Event('blur', {{ bubbles: true }});
+                    
+                    el.dispatchEvent(inputEvent);
+                    el.dispatchEvent(changeEvent);
+                    el.dispatchEvent(blurEvent);
+                    
+                    return true;
+                }}
+            """)
+            return True
+        except Exception:
+            return False
     
     def _wait_for_overlay(self, element, timeout: int = 5000):
         start_time = time.time()
