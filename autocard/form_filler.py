@@ -4,7 +4,7 @@ import random
 import time
 import re
 import json
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -341,25 +341,102 @@ class FormFiller:
                 self.anti_detection.random_delay(0.1, 0.2)
                 fill_success = self._safe_fill_input(element, str(value))
             
-            if not fill_success:
+    def _fill_single_field(
+        self, 
+        field_name: str, 
+        value: str, 
+        label_texts: List[str] = None
+    ) -> FillResult:
+        if label_texts is None:
+            label_texts = config.FIELD_MAPPINGS.get(field_name, [field_name])
+        
+        located = self.field_locator.locate_field(field_name, label_texts)
+        
+        if not located:
+            return FillResult(
+                success=False,
+                field_name=field_name,
+                value=value,
+                error_message=f"无法定位字段: {field_name}"
+            )
+        
+        try:
+            context = located.frame_context or self.page
+            selector = located.selector
+            input_type = located.input_type
+            
+            self.anti_detection.random_pause_between_actions()
+            
+            element = context.query_selector(selector)
+            if not element:
                 return FillResult(
                     success=False,
                     field_name=field_name,
                     value=value,
-                    error_message=f"无法填充字段: {field_name}",
+                    error_message=f"元素不存在: {selector}",
                     selector_used=selector
                 )
+            
+            print(f"\n  [处理字段] {field_name} (input_type={input_type})")
+            
+            self._aggressive_remove_overlays()
+            
+            element_info = self._get_element_info(element)
+            print(f"    元素状态: {element_info}")
+            
+            if not element_info.get('is_interactable', False):
+                print(f"    [警告] 元素可能不可交互，尝试激活...")
+                self._try_activate_field(element, field_name)
+            
+            is_in_viewport = self._check_element_in_viewport(element)
+            if not is_in_viewport:
+                print(f"    字段不在视口内，尝试滚动...")
+                scroll_success = self._force_scroll_into_view(element)
+                if not scroll_success:
+                    print(f"    [警告] 滚动可能失败，但继续尝试...")
+            
+            self.anti_detection.random_delay(0.1, 0.2)
+            
+            fill_success = False
+            actual_value = None
+            
+            if input_type in ['text', 'email', 'tel', 'password', 'number', 'textarea']:
+                print(f"    使用文本输入策略...")
+                fill_success, actual_value = self._fill_text_field_with_verify(element, str(value), field_name)
+            
+            elif input_type == 'select':
+                print(f"    使用选择框策略...")
+                fill_success, actual_value = self._fill_select_with_verify(element, str(value), field_name)
+            
+            elif input_type == 'date':
+                print(f"    使用日期选择器策略...")
+                fill_success, actual_value = self._fill_date_field_with_verify(element, str(value), field_name)
+            
+            elif input_type in ['checkbox', 'radio']:
+                print(f"    使用选择器策略...")
+                fill_success, actual_value = self._fill_choice_field_with_verify(element, str(value), field_name)
+            
+            else:
+                print(f"    使用通用策略 (input_type={input_type})...")
+                fill_success, actual_value = self._fill_generic_with_verify(element, str(value), field_name)
+            
+            if fill_success:
+                print(f"    [✓] 填充成功: '{actual_value}'")
+            else:
+                print(f"    [✗] 填充失败")
             
             self.anti_detection.random_delay(0.1, 0.2)
             
             return FillResult(
-                success=True,
+                success=fill_success,
                 field_name=field_name,
                 value=value,
+                error_message=None if fill_success else "填充后验证失败",
                 selector_used=selector
             )
             
         except Exception as e:
+            print(f"    [✗] 异常: {e}")
             return FillResult(
                 success=False,
                 field_name=field_name,
@@ -368,133 +445,502 @@ class FormFiller:
                 selector_used=located.selector
             )
     
-    def _check_element_in_viewport(self, element) -> bool:
+    def _aggressive_remove_overlays(self):
         try:
-            return element.evaluate("""
-                el => {
-                    const rect = el.getBoundingClientRect();
-                    const windowHeight = window.innerHeight || document.documentElement.clientHeight;
-                    const windowWidth = window.innerWidth || document.documentElement.clientWidth;
+            removed_count = self.page.evaluate("""
+                () => {
+                    let removed = 0;
                     
-                    const isVisible = (
-                        rect.top >= 0 &&
-                        rect.left >= 0 &&
-                        rect.bottom <= windowHeight &&
-                        rect.right <= windowWidth
-                    );
+                    const selectors = [
+                        '.loading', '.spinner', '.overlay', '.modal-backdrop', '.mask',
+                        '[class*="loading"]', '[class*="spinner"]', '[class*="overlay"]',
+                        '.el-loading-mask', '.ant-spin-container',
+                        '#loading', '.fade-enter-active', '.fade-leave-active'
+                    ];
                     
-                    return isVisible;
-                }
-            """)
-        except Exception:
-            return False
-    
-    def _force_scroll_into_view(self, element) -> bool:
-        try:
-            element.evaluate("""
-                el => {
-                    el.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'center',
-                        inline: 'nearest'
+                    selectors.forEach(sel => {
+                        const elements = document.querySelectorAll(sel);
+                        elements.forEach(el => {
+                            const style = window.getComputedStyle(el);
+                            const pointerEvents = style.pointerEvents;
+                            const zIndex = style.zIndex;
+                            const opacity = style.opacity;
+                            const display = style.display;
+                            const visibility = style.visibility;
+                            
+                            if (pointerEvents === 'auto' && 
+                                (zIndex !== 'auto' || opacity !== '0') &&
+                                display !== 'none' && 
+                                visibility !== 'hidden') {
+                                el.style.display = 'none';
+                                el.style.pointerEvents = 'none';
+                                el.style.opacity = '0';
+                                el.style.visibility = 'hidden';
+                                removed++;
+                            }
+                        });
                     });
                     
-                    let parent = el.parentElement;
-                    while (parent) {
-                        const parentStyle = window.getComputedStyle(parent);
-                        if (parentStyle.overflow === 'auto' || 
-                            parentStyle.overflow === 'scroll' ||
-                            parentStyle.overflowY === 'auto' ||
-                            parentStyle.overflowY === 'scroll') {
-                            el.scrollIntoView({
-                                behavior: 'smooth',
-                                block: 'center',
-                                inline: 'nearest'
-                            });
+                    const allElements = document.querySelectorAll('*');
+                    allElements.forEach(el => {
+                        const style = window.getComputedStyle(el);
+                        if (style.pointerEvents === 'auto' && 
+                            style.zIndex !== 'auto' &&
+                            parseInt(style.zIndex) > 1000) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                el.style.pointerEvents = 'none';
+                                removed++;
+                            }
                         }
-                        parent = parent.parentElement;
-                    }
+                    });
                     
-                    return true;
+                    return removed;
                 }
             """)
-            return True
-        except Exception:
-            return False
+            
+            if removed_count > 0:
+                print(f"    [提示] 移除了 {removed_count} 个潜在的遮罩元素")
+                
+        except Exception as e:
+            pass
     
-    def _fill_input_direct(self, element, value: str) -> bool:
-        strategies = [
-            ("js_set_value_with_events", self._fill_js_with_events),
-            ("js_set_value_simple", self._fill_js_set_value),
-            ("playwright_type", self._fill_type),
-            ("playwright_fill", self._fill_playwright),
-        ]
-        
-        for strategy_name, strategy_func in strategies:
-            try:
-                success = strategy_func(element, value)
-                if success:
-                    if strategy_name != "playwright_fill" and strategy_name != "playwright_type":
-                        print(f"  [提示] 使用策略 '{strategy_name}' 填充成功")
-                    return True
-                self.anti_detection.random_delay(0.05, 0.1)
-            except Exception as e:
-                print(f"  [调试] 策略 '{strategy_name}' 失败: {e}")
-                continue
-        
-        return False
-    
-    def _fill_select_field(self, element, value: str) -> bool:
+    def _get_element_info(self, element) -> Dict[str, Any]:
         try:
-            success = element.evaluate(f"""
-                el => {{
-                    const options = el.querySelectorAll('option');
-                    const targetValue = {json.dumps(value)};
+            info = element.evaluate("""
+                el => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
                     
-                    for (let opt of options) {{
-                        const optText = (opt.textContent || '').trim();
-                        const optValue = (opt.value || '').trim();
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    const topElement = document.elementFromPoint(centerX, centerY);
+                    
+                    let isBlocked = false;
+                    let blockingElement = null;
+                    if (topElement && !el.contains(topElement) && topElement !== el) {
+                        const topStyle = window.getComputedStyle(topElement);
+                        const topPointerEvents = topStyle.pointerEvents;
+                        const topDisplay = topStyle.display;
+                        const topVisibility = topStyle.visibility;
+                        const topOpacity = topStyle.opacity;
                         
-                        if (optValue === targetValue || 
-                            optText === targetValue ||
-                            optText.includes(targetValue) ||
-                            targetValue.includes(optText)) {{
-                            opt.selected = true;
-                            
-                            const inputEvent = new Event('input', {{ bubbles: true }});
-                            const changeEvent = new Event('change', {{ bubbles: true }});
-                            el.dispatchEvent(inputEvent);
-                            el.dispatchEvent(changeEvent);
-                            
-                            return true;
-                        }}
+                        if (topPointerEvents === 'auto' && 
+                            topDisplay !== 'none' && 
+                            topVisibility !== 'hidden' &&
+                            topOpacity !== '0') {
+                            isBlocked = true;
+                            blockingElement = topElement.tagName + (topElement.className ? '.' + topElement.className.split(' ')[0] : '');
+                        }
+                    }
+                    
+                    return {
+                        tagName: el.tagName,
+                        type: el.type || null,
+                        name: el.name || null,
+                        id: el.id || null,
+                        value: el.value || '',
+                        isVisible: rect.width > 0 && rect.height > 0,
+                        isEnabled: !el.disabled,
+                        isReadOnly: el.readOnly,
+                        pointerEvents: style.pointerEvents,
+                        display: style.display,
+                        visibility: style.visibility,
+                        opacity: style.opacity,
+                        rect: {
+                            top: rect.top,
+                            left: rect.left,
+                            width: rect.width,
+                            height: rect.height
+                        },
+                        isInViewport: rect.top >= 0 && rect.left >= 0 && 
+                                     rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                                     rect.right <= (window.innerWidth || document.documentElement.clientWidth),
+                        isBlocked: isBlocked,
+                        blockingElement: blockingElement,
+                        isInteractable: !el.disabled && 
+                                       !el.readOnly && 
+                                       rect.width > 0 && 
+                                       rect.height > 0 &&
+                                       style.display !== 'none' &&
+                                       style.visibility !== 'hidden' &&
+                                       style.opacity !== '0' &&
+                                       !isBlocked
+                    };
+                }
+            """)
+            return info
+        except Exception as e:
+            return {"error": str(e), "is_interactable": True}
+    
+    def _try_activate_field(self, element, field_name: str):
+        try:
+            activated = element.evaluate(f"""
+                el => {{
+                    const fieldName = {json.dumps(field_name)};
+                    
+                    el.style.pointerEvents = 'auto';
+                    el.readOnly = false;
+                    el.disabled = false;
+                    
+                    if (el.parentElement) {{
+                        el.parentElement.style.pointerEvents = 'auto';
+                    }}
+                    
+                    const tabTexts = ['教育', '工作', '项目', '基本信息', '个人信息', '经历', '学历'];
+                    const currentText = el.textContent || '';
+                    const inputType = el.type || '';
+                    
+                    let needsActivation = false;
+                    let selector = '';
+                    
+                    if (inputType === 'date' || fieldName.includes('date') || fieldName.includes('time')) {{
+                        needsActivation = true;
+                        selector = 'input[type="date"], input[placeholder*="日期"], input[placeholder*="时间"]';
+                    }} else if (fieldName === 'education' || fieldName === 'gender' || 
+                               currentText.includes('学历') || currentText.includes('性别')) {{
+                        needsActivation = true;
+                        selector = 'select, [role="combobox"], [class*="select"]';
+                    }} else if (fieldName.includes('description') || fieldName === 'self_introduction') {{
+                        needsActivation = true;
+                        selector = 'textarea, [contenteditable="true"]';
+                    }}
+                    
+                    if (needsActivation) {{
+                        const focusEvent = new FocusEvent('focus', {{ bubbles: true }});
+                        const clickEvent = new MouseEvent('click', {{ bubbles: true, cancelable: true }});
+                        
+                        el.dispatchEvent(focusEvent);
+                        el.dispatchEvent(clickEvent);
+                        
+                        return true;
                     }}
                     
                     return false;
                 }}
             """)
             
-            if success:
-                return True
-            
-            print(f"  [提示] JavaScript 选择失败，尝试 Playwright 原生方法...")
+            if activated:
+                print(f"    [提示] 尝试激活字段: {field_name}")
+                self.anti_detection.random_delay(0.2, 0.4)
+                
+        except Exception as e:
+            print(f"    [调试] 激活字段失败: {e}")
+    
+    def _get_actual_value(self, element) -> str:
+        try:
+            return element.evaluate("""
+                el => {
+                    if (el.tagName === 'SELECT') {
+                        const selectedOpt = el.options[el.selectedIndex];
+                        return selectedOpt ? (selectedOpt.value || selectedOpt.textContent || '') : '';
+                    }
+                    if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+                        return el.checked ? 'checked' : '';
+                    }
+                    return el.value || el.textContent || '';
+                }
+            """)
+        except Exception:
+            return ''
+    
+    def _fill_text_field_with_verify(self, element, value: str, field_name: str) -> Tuple[bool, str]:
+        strategies = [
+            ("playwright_fill_with_verify", self._fill_playwright_with_verify),
+            ("js_with_events_and_verify", self._fill_js_with_events_and_verify),
+            ("playwright_type_with_verify", self._fill_type_with_verify),
+        ]
+        
+        for strategy_name, strategy_func in strategies:
             try:
-                element.select_option(label=value)
-                return True
-            except Exception:
-                pass
+                self._aggressive_remove_overlays()
+                self.anti_detection.random_delay(0.1, 0.2)
+                
+                success, actual_val = strategy_func(element, value)
+                if success:
+                    if strategy_name != "playwright_fill_with_verify":
+                        print(f"    [提示] 使用策略 '{strategy_name}' 成功")
+                    return True, actual_val
+                
+                self.anti_detection.random_delay(0.05, 0.1)
+            except Exception as e:
+                print(f"    [调试] 策略 '{strategy_name}' 失败: {e}")
+                continue
+        
+        final_value = self._get_actual_value(element)
+        return self._values_match(final_value, value), final_value
+    
+    def _fill_playwright_with_verify(self, element, value: str) -> Tuple[bool, str]:
+        try:
+            element.evaluate("el => { el.value = ''; el.focus(); }")
+            self.anti_detection.random_delay(0.05, 0.1)
             
-            try:
-                element.select_option(value=value)
-                return True
-            except Exception:
-                pass
+            element.fill(value)
+            self.anti_detection.random_delay(0.1, 0.2)
             
-            return False
+            actual = self._get_actual_value(element)
+            return self._values_match(actual, value), actual
+        except Exception as e:
+            print(f"    [调试] playwright_fill 失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_js_with_events_and_verify(self, element, value: str) -> Tuple[bool, str]:
+        try:
+            success = element.evaluate(f"""
+                el => {{
+                    const targetValue = {json.dumps(value)};
+                    
+                    el.value = '';
+                    el.focus();
+                    
+                    const inputEvent = new Event('input', {{ bubbles: true }});
+                    el.dispatchEvent(inputEvent);
+                    
+                    el.value = targetValue;
+                    
+                    const inputEvent2 = new Event('input', {{ bubbles: true }});
+                    const changeEvent = new Event('change', {{ bubbles: true }});
+                    const blurEvent = new Event('blur', {{ bubbles: true }});
+                    
+                    el.dispatchEvent(inputEvent2);
+                    el.dispatchEvent(changeEvent);
+                    el.dispatchEvent(blurEvent);
+                    
+                    if (el.value === targetValue) {{
+                        return true;
+                    }}
+                    
+                    el.setAttribute('value', targetValue);
+                    return el.value === targetValue || el.getAttribute('value') === targetValue;
+                }}
+            """)
+            
+            self.anti_detection.random_delay(0.1, 0.2)
+            
+            actual = self._get_actual_value(element)
+            
+            if success and self._values_match(actual, value):
+                return True, actual
+            
+            return self._values_match(actual, value), actual
             
         except Exception as e:
-            print(f"  [调试] 选择框填充失败: {e}")
-            return False
+            print(f"    [调试] js_with_events 失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_type_with_verify(self, element, value: str) -> Tuple[bool, str]:
+        try:
+            element.evaluate("el => { el.value = ''; el.focus(); }")
+            self.anti_detection.random_delay(0.05, 0.1)
+            
+            self.anti_detection.simulate_human_typing(element, value)
+            self.anti_detection.random_delay(0.1, 0.2)
+            
+            element.evaluate("el => el.blur();")
+            
+            actual = self._get_actual_value(element)
+            return self._values_match(actual, value), actual
+        except Exception as e:
+            print(f"    [调试] playwright_type 失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_select_with_verify(self, element, value: str, field_name: str) -> Tuple[bool, str]:
+        try:
+            is_native_select = element.evaluate("el => el.tagName === 'SELECT'")
+            
+            if is_native_select:
+                success = element.evaluate(f"""
+                    el => {{
+                        const targetValue = {json.dumps(value)};
+                        const options = el.querySelectorAll('option');
+                        
+                        for (let opt of options) {{
+                            const optText = (opt.textContent || '').trim();
+                            const optValue = (opt.value || '').trim();
+                            
+                            if (optValue === targetValue || 
+                                optText === targetValue ||
+                                optText.includes(targetValue) ||
+                                targetValue.includes(optText)) {{
+                                opt.selected = true;
+                                
+                                const inputEvent = new Event('input', {{ bubbles: true }});
+                                const changeEvent = new Event('change', {{ bubbles: true }});
+                                el.dispatchEvent(inputEvent);
+                                el.dispatchEvent(changeEvent);
+                                
+                                return true;
+                            }}
+                        }}
+                        
+                        return false;
+                    }}
+                """)
+                
+                if success:
+                    self.anti_detection.random_delay(0.1, 0.2)
+                    actual = self._get_actual_value(element)
+                    return self._values_match(actual, value), actual
+            
+            print(f"    [提示] 不是原生 select，尝试自定义下拉框...")
+            
+            try:
+                element.click(timeout=2000)
+                self.anti_detection.random_delay(0.3, 0.5)
+                
+                option_selectors = [
+                    'li', '.dropdown-item', '.option', "[role='option']",
+                    '.el-select-dropdown__item', '.ant-select-dropdown-menu-item',
+                    '.select-option', '.combobox-option'
+                ]
+                
+                for sel in option_selectors:
+                    try:
+                        options = self.page.query_selector_all(sel)
+                        for opt in options:
+                            opt_text = opt.text_content() or ''
+                            opt_text = opt_text.strip()
+                            
+                            if self._values_match(opt_text, value):
+                                opt.click(timeout=2000)
+                                self.anti_detection.random_delay(0.2, 0.3)
+                                
+                                actual = self._get_actual_value(element)
+                                if self._values_match(actual, value) or self._values_match(opt_text, value):
+                                    return True, actual or opt_text
+                    except Exception:
+                        continue
+                
+            except Exception as click_error:
+                if "intercept" in str(click_error).lower() or "pointer" in str(click_error).lower():
+                    print(f"    [提示] 点击被拦截，尝试 JavaScript 点击...")
+                    element.evaluate("el => el.click()")
+                    self.anti_detection.random_delay(0.3, 0.5)
+            
+            actual = self._get_actual_value(element)
+            return self._values_match(actual, value), actual
+            
+        except Exception as e:
+            print(f"    [调试] select 填充失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_date_field_with_verify(self, element, value: str, field_name: str) -> Tuple[bool, str]:
+        try:
+            if isinstance(value, datetime):
+                date_str = value.strftime("%Y-%m-%d")
+            else:
+                date_str = str(value)
+            
+            success = element.evaluate(f"""
+                el => {{
+                    const dateStr = {json.dumps(date_str)};
+                    
+                    el.value = '';
+                    el.focus();
+                    
+                    el.value = dateStr;
+                    el.setAttribute('value', dateStr);
+                    
+                    const inputEvent = new Event('input', {{ bubbles: true }});
+                    const changeEvent = new Event('change', {{ bubbles: true }});
+                    el.dispatchEvent(inputEvent);
+                    el.dispatchEvent(changeEvent);
+                    
+                    return el.value === dateStr || el.getAttribute('value') === dateStr;
+                }}
+            """)
+            
+            self.anti_detection.random_delay(0.2, 0.3)
+            
+            actual = self._get_actual_value(element)
+            
+            if success and self._values_match(actual, date_str):
+                return True, actual
+            
+            try:
+                element.fill(date_str)
+                self.anti_detection.random_delay(0.2, 0.3)
+                actual = self._get_actual_value(element)
+                return self._values_match(actual, date_str), actual
+            except Exception:
+                pass
+            
+            return self._values_match(actual, date_str), actual
+            
+        except Exception as e:
+            print(f"    [调试] 日期填充失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_choice_field_with_verify(self, element, value: str, field_name: str) -> Tuple[bool, str]:
+        try:
+            is_radio = element.evaluate("el => el.type === 'radio'")
+            is_checkbox = element.evaluate("el => el.type === 'checkbox'")
+            
+            if is_radio:
+                element.evaluate("""
+                    el => {
+                        el.checked = true;
+                        const changeEvent = new Event('change', { bubbles: true });
+                        el.dispatchEvent(changeEvent);
+                    }
+                """)
+            elif is_checkbox:
+                should_check = str(value).lower() in ['true', '1', 'yes', 'checked', '是']
+                element.evaluate(f"""
+                    el => {{
+                        el.checked = {should_check};
+                        const changeEvent = new Event('change', {{ bubbles: true }});
+                        el.dispatchEvent(changeEvent);
+                    }}
+                """)
+            
+            self.anti_detection.random_delay(0.1, 0.2)
+            
+            actual = self._get_actual_value(element)
+            return True, actual
+            
+        except Exception as e:
+            print(f"    [调试] 选择字段填充失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _fill_generic_with_verify(self, element, value: str, field_name: str) -> Tuple[bool, str]:
+        try:
+            self._safe_click(element, field_name)
+            self.anti_detection.random_delay(0.1, 0.2)
+            
+            return self._fill_text_field_with_verify(element, value, field_name)
+            
+        except Exception as e:
+            print(f"    [调试] 通用填充失败: {e}")
+            return False, self._get_actual_value(element)
+    
+    def _values_match(self, actual: str, expected: str) -> bool:
+        if not actual and not expected:
+            return True
+        
+        actual_lower = str(actual).lower().strip()
+        expected_lower = str(expected).lower().strip()
+        
+        if actual_lower == expected_lower:
+            return True
+        
+        if expected_lower in actual_lower:
+            return True
+        
+        if actual_lower in expected_lower:
+            return True
+        
+        actual_clean = re.sub(r'[\s\-_./\u4e00-\u9fa5]', '', actual_lower)
+        expected_clean = re.sub(r'[\s\-_./\u4e00-\u9fa5]', '', expected_lower)
+        
+        if actual_clean == expected_clean:
+            return True
+        
+        if len(actual_clean) > 0 and len(expected_clean) > 0:
+            if actual_clean in expected_clean or expected_clean in actual_clean:
+                return True
+        
+        return False
     
     def _safe_click(self, element, field_name: str) -> bool:
         click_strategies = [
